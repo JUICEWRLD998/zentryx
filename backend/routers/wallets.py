@@ -2,15 +2,15 @@
 GET /api/wallets — leaderboard endpoint.
 GET /api/wallets/{address} — single wallet detail.
 
-Returns the top 15 tracked wallets enriched with fresh PnL data from
-Birdeye endpoint 3 (/wallet/v2/pnl/multiple).
+Serves leaderboard from in-memory cached discovery data (free-tier safe).
+No calls to paid endpoints (/wallet/v2/pnl/multiple) at request time.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from models.schemas import LeaderboardEntry
 from services import birdeye
@@ -25,47 +25,22 @@ router = APIRouter(prefix="/api", tags=["wallets"])
 @router.get("/wallets", response_model=list[LeaderboardEntry])
 async def list_wallets() -> list[LeaderboardEntry]:
     """
-    Return the leaderboard of currently tracked wallets.
-
-    Fetches fresh batch PnL data from Birdeye for all tracked addresses,
-    merges with in-memory discovery data, and returns a ranked list.
+    Return the leaderboard from cached wallet-discovery data.
+    Metrics are refreshed weekly by the APScheduler cron job (and on startup).
+    This path makes zero additional Birdeye calls — free-tier safe.
     """
     tracked = get_tracked_wallets()
-
-    if not tracked:
-        return []
-
-    addresses = [w.address for w in tracked]
-
-    # Batch PnL fetch (endpoint 3) — one call for all wallets
-    try:
-        batch_raw = await birdeye.get_wallet_pnl_multiple(addresses)
-        batch_items: list[dict] = batch_raw.get("data") or []
-    except Exception as exc:
-        logger.error("Batch PnL fetch failed: %s", exc)
-        # Fall back to cached discovery data instead of erroring out
-        batch_items = []
-
-    # Index fresh data by address for O(1) lookup
-    fresh_by_address: dict[str, dict] = {
-        item["address"]: item for item in batch_items if item.get("address")
-    }
-
-    leaderboard: list[LeaderboardEntry] = []
-    for rank, wallet in enumerate(tracked, start=1):
-        fresh = fresh_by_address.get(wallet.address, {})
-        leaderboard.append(
-            LeaderboardEntry(
-                rank=rank,
-                address=wallet.address,
-                label=wallet.label,
-                total_pnl=float(fresh.get("total_pnl") or wallet.total_pnl),
-                win_rate=float(fresh.get("win_rate") or wallet.win_rate),
-                trade_count=int(fresh.get("trade_count") or wallet.trade_count),
-            )
+    return [
+        LeaderboardEntry(
+            rank=rank,
+            address=w.address,
+            label=w.label,
+            total_pnl=w.total_pnl,
+            win_rate=w.win_rate,
+            trade_count=w.trade_count,
         )
-
-    return leaderboard
+        for rank, w in enumerate(tracked, start=1)
+    ]
 
 
 @router.get("/wallets/{address}")

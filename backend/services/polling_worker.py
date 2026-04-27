@@ -62,20 +62,26 @@ async def _poll_token(token: dict, tracked_wallet_addrs: set[str], on_event) -> 
     now = int(time.time())
     cutoff = now - POLL_INTERVAL_SECS * 3  # only process recent txs
 
+    total = len(txs)
+    skipped_dup = skipped_stale = skipped_usd = emitted = 0
+
     for tx in txs:
         # Deduplicate
         tx_hash = tx.get("txHash") or tx.get("hash") or tx.get("signature") or ""
         if not tx_hash or tx_hash in _seen_tx_ids:
+            skipped_dup += 1
             continue
 
         # Skip old transactions
         ts = tx.get("blockUnixTime") or tx.get("timestamp") or 0
         if ts < cutoff:
+            skipped_stale += 1
             continue
 
         # Filter by minimum USD value
         value_usd = float(tx.get("volumeUSD") or tx.get("value") or tx.get("amount") or 0)
         if value_usd < MIN_VALUE_USD:
+            skipped_usd += 1
             continue
 
         _seen_tx_ids.add(tx_hash)
@@ -103,11 +109,16 @@ async def _poll_token(token: dict, tracked_wallet_addrs: set[str], on_event) -> 
                 "blockUnixTime": ts,
             },
         }
-
+        emitted += 1
         try:
             asyncio.create_task(on_event(synthetic_event))
         except Exception as exc:
             logger.debug("Enrichment task error: %s", exc)
+
+    logger.info(
+        "[%s] polled %d txs → emitted=%d dup=%d stale=%d below_usd=%d (min=$%s)",
+        symbol, total, emitted, skipped_dup, skipped_stale, skipped_usd, MIN_VALUE_USD,
+    )
 
 
 async def run_polling_worker(on_event) -> None:
