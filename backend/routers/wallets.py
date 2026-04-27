@@ -1,17 +1,20 @@
 """
 GET /api/wallets — leaderboard endpoint.
+GET /api/wallets/{address} — single wallet detail.
 
 Returns the top 15 tracked wallets enriched with fresh PnL data from
 Birdeye endpoint 3 (/wallet/v2/pnl/multiple).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException
 
 from models.schemas import LeaderboardEntry
 from services import birdeye
+from services import wallet_discovery as wd
 from services.wallet_discovery import get_tracked_wallets
 
 logger = logging.getLogger(__name__)
@@ -65,11 +68,56 @@ async def list_wallets() -> list[LeaderboardEntry]:
     return leaderboard
 
 
+@router.get("/wallets/{address}")
+async def wallet_detail(address: str) -> dict:
+    """
+    Return detailed data for a single wallet.
+    Fetches pnl/summary and net-worth in parallel; tolerates 401/403 on paid endpoints.
+    """
+    wallet = wd.tracked_wallets.get(address)
+
+    pnl_raw, net_worth_raw = await asyncio.gather(
+        birdeye.get_wallet_pnl_summary(address),
+        birdeye.get_wallet_net_worth(address),
+        return_exceptions=True,
+    )
+
+    pnl_data: dict = {}
+    if isinstance(pnl_raw, dict):
+        data_block = pnl_raw.get("data") or {}
+        summary = data_block.get("summary") or {}
+        pnl_block = summary.get("pnl") or {}
+        counts_block = summary.get("counts") or {}
+        pnl_data = {
+            "realized_usd": pnl_block.get("realized_profit_usd"),
+            "unrealized_usd": pnl_block.get("unrealized_usd"),
+            "total_usd": pnl_block.get("total_usd"),
+            "win_rate": counts_block.get("win_rate"),
+            "total_trade": counts_block.get("total_trade"),
+            "total_win": counts_block.get("total_win"),
+            "total_loss": counts_block.get("total_loss"),
+        }
+
+    net_worth_data: dict = {}
+    if isinstance(net_worth_raw, dict):
+        data = net_worth_raw.get("data") or {}
+        net_worth_data = {
+            "total_usd": data.get("total_usd") or data.get("totalUsd"),
+        }
+
+    return {
+        "address": address,
+        "label": wallet.label if wallet else f"{address[:8]}...",
+        "is_tracked": wallet is not None,
+        "pnl": pnl_data,
+        "net_worth": net_worth_data,
+    }
+
+
 @router.post("/wallets/discover", status_code=202)
 async def trigger_discovery() -> dict:
     """Manually trigger wallet discovery (useful for testing without waiting for cron)."""
     from services.wallet_discovery import discover_wallets  # local import to avoid circular
-    import asyncio
 
     asyncio.create_task(discover_wallets())
     return {"message": "Wallet discovery triggered."}

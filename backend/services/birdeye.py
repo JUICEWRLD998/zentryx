@@ -50,9 +50,18 @@ async def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as exc:
-            # Don't retry on 4xx client errors (bad params, auth, etc.)
-            if 400 <= exc.response.status_code < 500:
-                logger.error("Birdeye 4xx %s %s: %s", exc.response.status_code, path, exc.response.text)
+            status = exc.response.status_code
+            # 429 rate-limit: retryable with longer backoff
+            if status == 429:
+                wait = delay * 3  # triple backoff for rate limits
+                logger.warning("Birdeye 429 rate-limit on %s — waiting %ds (attempt %d/%d)", path, wait, attempt, len(delays))
+                if attempt < len(delays):
+                    await asyncio.sleep(wait)
+                last_exc = exc
+                continue
+            # Don't retry on other 4xx client errors (bad params, auth, etc.)
+            if 400 <= status < 500:
+                logger.error("Birdeye 4xx %s %s: %s", status, path, exc.response.text)
                 raise
             last_exc = exc
             logger.warning("Birdeye attempt %d/%d failed (%s): %s", attempt, len(delays), path, exc)
