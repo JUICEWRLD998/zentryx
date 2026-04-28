@@ -287,7 +287,7 @@ function TokenSlideOver({
                 </div>
 
                 {/* Links */}
-                <div className="flex gap-3 pb-4">
+                <div className="flex flex-wrap gap-3 pb-4">
                   <a
                     href={`https://solscan.io/token/${event.token_address}`}
                     target="_blank"
@@ -296,6 +296,13 @@ function TokenSlideOver({
                   >
                     SOLSCAN →
                   </a>
+                  <Link
+                    href={`/token/${event.token_address}`}
+                    onClick={() => onOpenChange(false)}
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors border border-border rounded px-3 py-2"
+                  >
+                    TOKEN DETAIL →
+                  </Link>
                   {event.wallet_address && (
                     <Link
                       href={`/wallet/${event.wallet_address}`}
