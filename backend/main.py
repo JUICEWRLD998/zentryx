@@ -27,7 +27,7 @@ from scheduler import scheduler
 from services.birdeye_ws import run_birdeye_ws
 from services.enrichment import process_trade_event
 from services.polling_worker import run_polling_worker
-from services.telegram import send_startup_message
+from services.telegram import run_bot_command_loop, send_startup_message
 from services.wallet_discovery import discover_wallets
 
 logging.basicConfig(
@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 _ws_task: asyncio.Task | None = None
 _poll_task: asyncio.Task | None = None
+_bot_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
@@ -58,6 +59,10 @@ async def lifespan(app: FastAPI):
     _poll_task = asyncio.create_task(run_polling_worker(process_trade_event))
     logger.info("REST polling fallback started.")
 
+    # Start Telegram bot command loop — listens for /start, /wallets, /help
+    _bot_task = asyncio.create_task(run_bot_command_loop())
+    logger.info("Telegram bot command loop started.")
+
     # Telegram startup ping
     await send_startup_message()
 
@@ -68,6 +73,8 @@ async def lifespan(app: FastAPI):
         _ws_task.cancel()
     if _poll_task and not _poll_task.done():
         _poll_task.cancel()
+    if _bot_task and not _bot_task.done():
+        _bot_task.cancel()
     scheduler.shutdown(wait=False)
     logger.info("Zentryx backend shut down.")
 
