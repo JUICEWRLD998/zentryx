@@ -53,56 +53,61 @@
   --color-grid: var(--grid);
 }
 
-/* ─── Zentryx terminal theme — always dark, no light mode ─────────────── */
+/* ─── Zentryx theme — light default, dark class overrides ─────────────── */
 :root {
-  /* Core palette */
+  /* Core palette — light mode */
+  --buy:  #00A86B;
+  --sell: #DC2626;
+  --cyan: #0891B2;
+  --grid: oklch(0 0 0 / 3%);
+
+  /* shadcn tokens — light mode */
+  --background: #F5F5FA;
+  --foreground: #0A0A0F;
+  --card: #FFFFFF;
+  --card-foreground: #0A0A0F;
+  --popover: #FFFFFF;
+  --popover-foreground: #0A0A0F;
+  --primary: #00A86B;
+  --primary-foreground: #FFFFFF;
+  --secondary: #EAEAF4;
+  --secondary-foreground: #0A0A0F;
+  --muted: #EBEBF4;
+  --muted-foreground: #60608A;
+  --accent: #0891B2;
+  --accent-foreground: #FFFFFF;
+  --destructive: #DC2626;
+  --border: oklch(0 0 0 / 10%);
+  --input: oklch(0 0 0 / 8%);
+  --ring: #00A86B;
+
+  /* Chart tokens */
+  --chart-1: #00A86B;
+  --chart-2: #0891B2;
+  --chart-3: #DC2626;
+  --chart-4: #D97706;
+  --chart-5: #9333EA;
+
+  --radius: 0.5rem;
+
+  /* Sidebar */
+  --sidebar: #EDEDF7;
+  --sidebar-foreground: #0A0A0F;
+  --sidebar-primary: #00A86B;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #EAEAF4;
+  --sidebar-accent-foreground: #0A0A0F;
+  --sidebar-border: oklch(0 0 0 / 10%);
+  --sidebar-ring: #00A86B;
+}
+
+/* ─── Dark mode overrides ─────────────────────────────────────────────── */
+.dark {
   --buy:  #00FFA3;
   --sell: #FF4D4D;
   --cyan: #00D4FF;
   --grid: oklch(1 0 0 / 4%);
 
-  /* shadcn tokens remapped to Zentryx */
-  --background: #0A0A0F;
-  --foreground: #E8E8F0;
-  --card: #12121A;
-  --card-foreground: #E8E8F0;
-  --popover: #12121A;
-  --popover-foreground: #E8E8F0;
-  --primary: #00FFA3;
-  --primary-foreground: #0A0A0F;
-  --secondary: #1A1A2E;
-  --secondary-foreground: #E8E8F0;
-  --muted: #1A1A2E;
-  --muted-foreground: #8888A0;
-  --accent: #00D4FF;
-  --accent-foreground: #0A0A0F;
-  --destructive: #FF4D4D;
-  --border: oklch(1 0 0 / 8%);
-  --input: oklch(1 0 0 / 10%);
-  --ring: #00FFA3;
-
-  /* Chart tokens */
-  --chart-1: #00FFA3;
-  --chart-2: #00D4FF;
-  --chart-3: #FF4D4D;
-  --chart-4: #FFB347;
-  --chart-5: #A855F7;
-
-  --radius: 0.5rem;
-
-  /* Sidebar */
-  --sidebar: #0E0E16;
-  --sidebar-foreground: #E8E8F0;
-  --sidebar-primary: #00FFA3;
-  --sidebar-primary-foreground: #0A0A0F;
-  --sidebar-accent: #1A1A2E;
-  --sidebar-accent-foreground: #E8E8F0;
-  --sidebar-border: oklch(1 0 0 / 8%);
-  --sidebar-ring: #00FFA3;
-}
-
-/* dark class mirrors root (we always run dark) */
-.dark {
   --background: #0A0A0F;
   --foreground: #E8E8F0;
   --card: #12121A;
