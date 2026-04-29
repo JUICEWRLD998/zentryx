@@ -35,20 +35,35 @@ def _parse_pnl_item(item: dict) -> tuple[float, float, int]:
     """
     Parse (total_pnl, win_rate, trade_count) from a Birdeye PnL item.
 
-    Handles both the flat structure returned by /pnl/multiple and the nested
-    structure returned by /pnl/summary, so callers don't need to branch.
+    Handles three response shapes:
+      1. Flat (pnl/multiple):  item = {"address": ..., "total_pnl": 123, "win_rate": 0.6, ...}
+      2. Nested summary (pnl/summary fallback): item = {"pnl": {"realized_profit_usd": ...},
+                                                         "counts": {"win_rate": ..., ...}}
+      3. Wrapper (pnl/summary): item = {"summary": {"pnl": {...}, "counts": {...}}}
     """
-    # Flat structure (pnl/multiple): direct fields on the item
-    total_pnl = float(
-        item.get("total_pnl") or item.get("pnl") or item.get("pnl_usd") or 0
-    )
+    pnl_field = item.get("pnl")
+
+    # Shape 2: pnl field is a nested dict — item IS the summary block
+    if isinstance(pnl_field, dict):
+        pnl_block = pnl_field
+        counts_block = item.get("counts") or {}
+        total_pnl = float(
+            pnl_block.get("realized_profit_usd") or pnl_block.get("total_usd") or 0
+        )
+        win_rate = float(counts_block.get("win_rate") or 0)
+        trade_count = int(
+            counts_block.get("total_trade") or counts_block.get("total_trading") or 0
+        )
+        return total_pnl, win_rate, trade_count
+
+    # Shape 1: flat — direct numeric fields
+    total_pnl = float(item.get("total_pnl") or pnl_field or item.get("pnl_usd") or 0)
     win_rate = float(item.get("win_rate") or item.get("winRate") or 0)
     trade_count = int(
         item.get("trade_count") or item.get("total_trade") or item.get("total_trading") or 0
     )
 
-    # If flat fields are all zero, try the nested summary structure
-    # (pnl/summary wraps everything under data.summary.pnl / data.summary.counts)
+    # Shape 3: wrapper — fall through to nested summary block
     if total_pnl == 0 and win_rate == 0:
         summary = item.get("summary") or {}
         pnl_block = summary.get("pnl") or {}

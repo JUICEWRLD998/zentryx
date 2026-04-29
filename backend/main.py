@@ -15,11 +15,13 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
+from pathlib import Path
+
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-load_dotenv()  # Load backend/.env before any service initializes
+load_dotenv(Path(__file__).parent / ".env")  # Load backend/.env regardless of CWD
 
 import db
 from routers.wallets import router as wallets_router

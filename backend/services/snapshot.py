@@ -138,4 +138,15 @@ async def cleanup_old_trades() -> None:
         )
         logger.info("TTL cleanup: deleted %d trade events older than 30 days.", count)
     except Exception as exc:
-        logger.warning("TTL cleanup failed: %s", exc)
+        logger.warning("TTL cleanup (trades) failed: %s", exc)
+
+    # Purge expired token enrichment cache rows
+    now = datetime.now(tz=timezone.utc)
+    try:
+        count = await db.prisma.tokenenrichmentcache.delete_many(
+            where={"expiresAt": {"lt": now}}
+        )
+        if count:
+            logger.info("TTL cleanup: deleted %d expired token enrichment cache rows.", count)
+    except Exception as exc:
+        logger.warning("TTL cleanup (enrichment cache) failed: %s", exc)

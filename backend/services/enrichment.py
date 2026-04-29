@@ -26,6 +26,36 @@ logger = logging.getLogger(__name__)
 # Module-level lock: prevents concurrent refreshes of the smart-money cache
 _smart_money_lock = asyncio.Lock()
 
+# Per-token locks: prevent concurrent Birdeye fetches for the same token
+_enrichment_locks: dict[str, asyncio.Lock] = {}
+_enrichment_locks_mutex = asyncio.Lock()
+
+
+async def _get_enrichment_lock(token_address: str) -> asyncio.Lock:
+    """Return (or lazily create) the per-token lock for enrichment fetches."""
+    async with _enrichment_locks_mutex:
+        if token_address not in _enrichment_locks:
+            _enrichment_locks[token_address] = asyncio.Lock()
+        return _enrichment_locks[token_address]
+
+
+def _report_from_cache(token_address: str, cached, smart_money_flag: bool) -> TokenMiniReport:
+    """Build a TokenMiniReport directly from a TokenEnrichmentCache DB row."""
+    return TokenMiniReport(
+        token_address=token_address,
+        security_score=cached.securityScore,
+        is_honeypot=cached.isHoneypot,
+        smart_money_flag=smart_money_flag,
+        momentum_24h=cached.momentum24h,
+        holder_count=cached.holderCount,
+        buy_sell_ratio=cached.buySellRatio,
+        total_liquidity_usd=cached.liquidityUsd,
+        symbol=cached.symbol,
+        price=cached.price,
+        market_cap=cached.marketCap,
+        volume_24h=cached.volume24h,
+    )
+
 
 async def _get_smart_money_addresses() -> set[str]:
     """
@@ -101,92 +131,159 @@ async def _safe(coro) -> dict[str, Any]:
 
 async def build_mini_report(token_address: str) -> TokenMiniReport:
     """
-    Concurrently fetch token-intelligence data (endpoints 9–17) and compose
-    a TokenMiniReport. Endpoint 13 (smart money) is resolved via the 1-hour
-    DB cache instead of a live call.
+    Build a TokenMiniReport, caching all 8 Birdeye endpoint results per token
+    for 6 hours in the TokenEnrichmentCache table.
 
-    Failures on individual endpoints are swallowed so one bad endpoint never
-    kills the whole report.
+    Cost breakdown:
+      - Cache warm (within 6 hrs) → 0 CU  (DB read only)
+      - Cache cold (first trade)  → 8 CU  (Birdeye fetch, then cached 6 hrs)
+      - Smart-money flag          → 0 CU  (resolved via SmartMoneyCache, 1-hr TTL)
     """
-    # Resolve smart money flag from cache (0 CU if cache is warm)
+    # Smart money is always fresh from its own 1-hour cache (0 CU if warm)
     smart_money_addresses = await _get_smart_money_addresses()
-
-    # Endpoints 9–17, excluding 13 (now cached above)
-    (
-        security_raw,   # 9
-        price_raw,      # 10
-        holders_raw,    # 11
-        _dist_raw,      # 12
-        overview_raw,   # 14
-        trade_raw,      # 15
-        _txs_raw,       # 16
-        liquidity_raw,  # 17
-    ) = await asyncio.gather(
-        _safe(birdeye.get_token_security(token_address)),
-        _safe(birdeye.get_price_stats(token_address)),
-        _safe(birdeye.get_token_holders(token_address)),
-        _safe(birdeye.get_holder_distribution(token_address)),
-        _safe(birdeye.get_token_overview(token_address)),
-        _safe(birdeye.get_token_trade_data(token_address)),
-        _safe(birdeye.get_token_txs(token_address, limit=5)),
-        _safe(birdeye.get_exit_liquidity(token_address)),
-    )
-
-    # ── Security score ────────────────────────────────────────────────────
-    sec_data = security_raw.get("data") or {}
-    risk_score_raw = sec_data.get("risk_score") or sec_data.get("riskScore")
-    security_score: float | None = None
-    if risk_score_raw is not None:
-        try:
-            security_score = max(0.0, 100.0 - float(risk_score_raw))
-        except (TypeError, ValueError):
-            pass
-
-    is_honeypot = sec_data.get("is_honeypot") or sec_data.get("isHoneypot")
-
-    # ── Smart money flag (from cache) ─────────────────────────────────────
     smart_money_flag = token_address in smart_money_addresses
 
-    # ── Price / momentum ──────────────────────────────────────────────────
-    price_data = price_raw.get("data") or {}
-    momentum_24h = price_data.get("price_change_24h") or price_data.get("priceChange24h")
+    # ── Fast path: DB cache hit ──────────────────────────────────────────
+    if db.is_available():
+        now = datetime.now(tz=timezone.utc)
+        cached = await db.prisma.tokenenrichmentcache.find_first(
+            where={"tokenAddress": token_address, "expiresAt": {"gt": now}},
+        )
+        if cached:
+            logger.debug("Enrichment cache hit for %s", token_address[:8])
+            return _report_from_cache(token_address, cached, smart_money_flag)
 
-    # ── Holder count ──────────────────────────────────────────────────────
-    holders_data = holders_raw.get("data") or {}
-    holder_count = holders_data.get("holder_count") or holders_data.get("holderCount")
+    # ── Slow path: fetch from Birdeye under a per-token lock ─────────────
+    token_lock = await _get_enrichment_lock(token_address)
+    async with token_lock:
+        # Re-check after acquiring lock — another coroutine may have fetched already
+        if db.is_available():
+            now = datetime.now(tz=timezone.utc)
+            cached = await db.prisma.tokenenrichmentcache.find_first(
+                where={"tokenAddress": token_address, "expiresAt": {"gt": now}},
+            )
+            if cached:
+                return _report_from_cache(token_address, cached, smart_money_flag)
 
-    # ── Buy/sell ratio ────────────────────────────────────────────────────
-    trade_data = trade_raw.get("data") or {}
-    buy_vol = float(trade_data.get("buy_volume_24h") or trade_data.get("buyVolume24h") or 0)
-    sell_vol = float(trade_data.get("sell_volume_24h") or trade_data.get("sellVolume24h") or 0)
-    total_vol = buy_vol + sell_vol
-    buy_sell_ratio = round(buy_vol / total_vol, 4) if total_vol > 0 else None
+        logger.debug("Enrichment cache miss — fetching from Birdeye for %s", token_address[:8])
 
-    # ── Liquidity ─────────────────────────────────────────────────────────
-    liq_data = liquidity_raw.get("data") or {}
-    total_liquidity_usd = liq_data.get("total_liquidity_usd") or liq_data.get("totalLiquidityUsd")
+        # Endpoints 9–17, excluding 13 (resolved via SmartMoneyCache)
+        (
+            security_raw,   # 9
+            price_raw,      # 10
+            holders_raw,    # 11
+            _dist_raw,      # 12
+            overview_raw,   # 14
+            trade_raw,      # 15
+            _txs_raw,       # 16
+            liquidity_raw,  # 17
+        ) = await asyncio.gather(
+            _safe(birdeye.get_token_security(token_address)),
+            _safe(birdeye.get_price_stats(token_address)),
+            _safe(birdeye.get_token_holders(token_address)),
+            _safe(birdeye.get_holder_distribution(token_address)),
+            _safe(birdeye.get_token_overview(token_address)),
+            _safe(birdeye.get_token_trade_data(token_address)),
+            _safe(birdeye.get_token_txs(token_address, limit=5)),
+            _safe(birdeye.get_exit_liquidity(token_address)),
+        )
 
-    # ── Token overview ────────────────────────────────────────────────────
-    ov_data = overview_raw.get("data") or {}
-    symbol = ov_data.get("symbol")
-    price = ov_data.get("price")
-    market_cap = ov_data.get("market_cap") or ov_data.get("marketCap") or ov_data.get("mc")
-    volume_24h = ov_data.get("volume_24h") or ov_data.get("v24hUSD")
+        # ── Security score ───────────────────────────────────────────────
+        sec_data = security_raw.get("data") or {}
+        risk_score_raw = sec_data.get("risk_score") or sec_data.get("riskScore")
+        security_score: float | None = None
+        if risk_score_raw is not None:
+            try:
+                security_score = max(0.0, 100.0 - float(risk_score_raw))
+            except (TypeError, ValueError):
+                pass
+        is_honeypot = sec_data.get("is_honeypot") or sec_data.get("isHoneypot")
 
-    return TokenMiniReport(
-        token_address=token_address,
-        security_score=security_score,
-        is_honeypot=bool(is_honeypot) if is_honeypot is not None else None,
-        smart_money_flag=smart_money_flag,
-        momentum_24h=float(momentum_24h) if momentum_24h is not None else None,
-        holder_count=int(holder_count) if holder_count is not None else None,
-        buy_sell_ratio=buy_sell_ratio,
-        total_liquidity_usd=float(total_liquidity_usd) if total_liquidity_usd is not None else None,
-        symbol=symbol,
-        price=float(price) if price is not None else None,
-        market_cap=float(market_cap) if market_cap is not None else None,
-        volume_24h=float(volume_24h) if volume_24h is not None else None,
-    )
+        # ── Price / momentum ─────────────────────────────────────────────
+        price_data = price_raw.get("data") or {}
+        momentum_24h = price_data.get("price_change_24h") or price_data.get("priceChange24h")
+
+        # ── Holder count ─────────────────────────────────────────────────
+        holders_data = holders_raw.get("data") or {}
+        holder_count = holders_data.get("holder_count") or holders_data.get("holderCount")
+
+        # ── Buy/sell ratio ───────────────────────────────────────────────
+        trade_data = trade_raw.get("data") or {}
+        buy_vol = float(trade_data.get("buy_volume_24h") or trade_data.get("buyVolume24h") or 0)
+        sell_vol = float(trade_data.get("sell_volume_24h") or trade_data.get("sellVolume24h") or 0)
+        total_vol = buy_vol + sell_vol
+        buy_sell_ratio = round(buy_vol / total_vol, 4) if total_vol > 0 else None
+
+        # ── Liquidity ────────────────────────────────────────────────────
+        liq_data = liquidity_raw.get("data") or {}
+        total_liquidity_usd = liq_data.get("total_liquidity_usd") or liq_data.get("totalLiquidityUsd")
+
+        # ── Token overview ───────────────────────────────────────────────
+        ov_data = overview_raw.get("data") or {}
+        symbol = ov_data.get("symbol")
+        price = ov_data.get("price")
+        market_cap = ov_data.get("market_cap") or ov_data.get("marketCap") or ov_data.get("mc")
+        volume_24h = ov_data.get("volume_24h") or ov_data.get("v24hUSD")
+
+        report = TokenMiniReport(
+            token_address=token_address,
+            security_score=security_score,
+            is_honeypot=bool(is_honeypot) if is_honeypot is not None else None,
+            smart_money_flag=smart_money_flag,
+            momentum_24h=float(momentum_24h) if momentum_24h is not None else None,
+            holder_count=int(holder_count) if holder_count is not None else None,
+            buy_sell_ratio=buy_sell_ratio,
+            total_liquidity_usd=float(total_liquidity_usd) if total_liquidity_usd is not None else None,
+            symbol=symbol,
+            price=float(price) if price is not None else None,
+            market_cap=float(market_cap) if market_cap is not None else None,
+            volume_24h=float(volume_24h) if volume_24h is not None else None,
+        )
+
+        # ── Persist to cache ─────────────────────────────────────────────
+        if db.is_available():
+            expires_at = datetime.now(tz=timezone.utc) + timedelta(hours=6)
+            try:
+                await db.prisma.tokenenrichmentcache.upsert(
+                    where={"tokenAddress": token_address},
+                    data={
+                        "create": {
+                            "tokenAddress": token_address,
+                            "expiresAt": expires_at,
+                            "securityScore": report.security_score,
+                            "isHoneypot": report.is_honeypot,
+                            "momentum24h": report.momentum_24h,
+                            "holderCount": report.holder_count,
+                            "buySellRatio": report.buy_sell_ratio,
+                            "liquidityUsd": report.total_liquidity_usd,
+                            "symbol": report.symbol,
+                            "price": report.price,
+                            "marketCap": report.market_cap,
+                            "volume24h": report.volume_24h,
+                        },
+                        "update": {
+                            "expiresAt": expires_at,
+                            "securityScore": report.security_score,
+                            "isHoneypot": report.is_honeypot,
+                            "momentum24h": report.momentum_24h,
+                            "holderCount": report.holder_count,
+                            "buySellRatio": report.buy_sell_ratio,
+                            "liquidityUsd": report.total_liquidity_usd,
+                            "symbol": report.symbol,
+                            "price": report.price,
+                            "marketCap": report.market_cap,
+                            "volume24h": report.volume_24h,
+                        },
+                    },
+                )
+                logger.info(
+                    "Enrichment cache stored for %s (%s) — expires in 6 hours.",
+                    token_address[:8], report.symbol or "?",
+                )
+            except Exception as exc:
+                logger.warning("Failed to store enrichment cache: %s", exc)
+
+        return report
 
 
 async def _persist_trade(

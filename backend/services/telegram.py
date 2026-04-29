@@ -167,7 +167,7 @@ async def send_personal_trade_alert(
         logger.debug("Personal alert to user %s failed: %s", telegram_user_id, exc)
 
 
-
+async def send_startup_message() -> None:
     """Send a startup notification so you know the bot is alive."""
     bot = _get_bot()
     chat_id = _chat_id()
