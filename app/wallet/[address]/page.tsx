@@ -87,13 +87,13 @@ export default function WalletPage() {
             ZENTRYX
           </Link>
         </div>
-        <nav className="flex items-center gap-6 font-mono text-xs text-muted-foreground">
+        <nav className="hidden sm:flex items-center gap-6 font-mono text-xs text-muted-foreground">
           <Link href="/" className="hover:text-foreground transition-colors">LEADERBOARD</Link>
           <Link href="/live" className="hover:text-foreground transition-colors">LIVE FEED</Link>
         </nav>
       </header>
 
-      <main className="flex-1 px-6 py-8 max-w-5xl mx-auto w-full">
+      <main className="flex-1 px-4 sm:px-6 py-8 max-w-5xl mx-auto w-full">
         {/* Breadcrumb */}
         <div className="flex items-center gap-2 font-mono text-xs text-muted-foreground mb-6">
           <Link href="/" className="hover:text-foreground transition-colors">LEADERBOARD</Link>

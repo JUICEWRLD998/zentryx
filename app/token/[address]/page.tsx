@@ -205,7 +205,7 @@ export default function TokenPage() {
             ZENTRYX
           </Link>
         </div>
-        <nav className="flex items-center gap-6 font-mono text-xs text-muted-foreground">
+        <nav className="hidden sm:flex items-center gap-6 font-mono text-xs text-muted-foreground">
           <Link href="/" className="hover:text-foreground transition-colors">LEADERBOARD</Link>
           <Link href="/live" className="hover:text-foreground transition-colors">LIVE FEED</Link>
         </nav>
@@ -341,7 +341,7 @@ export default function TokenPage() {
                   </div>
 
                   {/* Color legend */}
-                  <div className="flex items-center gap-4 font-mono text-xs text-muted-foreground">
+                  <div className="flex flex-wrap items-center gap-3 font-mono text-xs text-muted-foreground">
                     <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-sell inline-block" /> 0-40 RISKY</span>
                     <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-500 inline-block" /> 40-70 OK</span>
                     <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-buy inline-block" /> 70+ SAFE</span>

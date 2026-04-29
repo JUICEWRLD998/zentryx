@@ -229,7 +229,7 @@ export default function Landing() {
 
         {/* ── Live Stats Bar ── */}
         <section className="px-6 pb-20">
-          <div className="max-w-3xl mx-auto grid grid-cols-3 gap-4">
+          <div className="max-w-3xl mx-auto grid grid-cols-1 sm:grid-cols-3 gap-4">
             <StatCard
               label="WHALES TRACKED"
               value={stats ? stats.whales.toString() : "—"}

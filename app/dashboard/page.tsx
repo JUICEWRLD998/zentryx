@@ -86,7 +86,7 @@ export default function Dashboard() {
             ZENTRYX
           </Link>
         </div>
-        <nav className="flex items-center gap-6 font-mono text-xs text-muted-foreground">
+        <nav className="hidden sm:flex items-center gap-6 font-mono text-xs text-muted-foreground">
           <Link href="/" className="hover:text-foreground transition-colors">HOME</Link>
           <span className="text-foreground border-b border-buy pb-0.5">DASHBOARD</span>
           <Link href="/live" className="hover:text-foreground transition-colors">LIVE FEED</Link>
@@ -94,9 +94,9 @@ export default function Dashboard() {
         <ThemeToggle />
       </header>
 
-      <main className="flex-1 px-6 py-8 max-w-5xl mx-auto w-full">
+      <main className="flex-1 px-4 sm:px-6 py-8 max-w-5xl mx-auto w-full">
         {/* ── Hero stats ── */}
-        <div className="grid grid-cols-3 gap-4 mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
           {[
             { label: "WHALES TRACKED", value: wallets.length.toString(), color: "text-cyan" },
             {
@@ -141,7 +141,8 @@ export default function Dashboard() {
               NO WALLETS TRACKED YET — DISCOVERY IN PROGRESS
             </div>
           ) : (
-            <table className="w-full font-mono text-sm">
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-140 font-mono text-sm">
               <thead>
                 <tr className="border-b border-border text-muted-foreground text-xs">
                   <th className="px-5 py-2.5 text-left w-8">#</th>
@@ -188,6 +189,7 @@ export default function Dashboard() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       </main>

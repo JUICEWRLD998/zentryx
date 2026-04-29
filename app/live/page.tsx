@@ -95,15 +95,9 @@ function TradeCard({
       onClick={() => onClick(event)}
       className="rounded-lg border border-border bg-card p-4 font-mono text-sm cursor-pointer hover:border-border/80 hover:bg-secondary/20 transition-colors"
     >
-      <div className="flex items-center justify-between gap-4">
-        {/* Left: wallet + token */}
-        <div className="flex flex-col gap-0.5 min-w-0">
-          <span className="text-muted-foreground text-xs truncate">{event.wallet_label}</span>
-          <span className="font-semibold text-foreground">${symbol}</span>
-        </div>
-
-        {/* Middle: side pill + amount */}
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-2 mb-1.5">
+        <span className="font-semibold text-foreground">${symbol}</span>
+        <div className="flex items-center gap-2 shrink-0">
           <span
             className={`rounded px-2 py-0.5 text-xs font-bold tracking-wider ${
               isBuy ? "bg-buy/15 text-buy" : "bg-sell/15 text-sell"
@@ -113,9 +107,11 @@ function TradeCard({
           </span>
           <span className="text-foreground font-semibold">{usd}</span>
         </div>
+      </div>
 
-        {/* Right: security + smart money + expand hint */}
-        <div className="flex flex-col items-end gap-0.5 shrink-0">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-muted-foreground text-xs truncate min-w-0">{event.wallet_label}</span>
+        <div className="flex items-center gap-2.5 shrink-0">
           {secScore != null && (
             <span className={`text-xs ${secColor}`}>SEC {secScore.toFixed(0)}</span>
           )}
@@ -349,15 +345,15 @@ export default function LivePage() {
             ZENTRYX
           </Link>
         </div>
-        <nav className="flex items-center gap-6 font-mono text-xs text-muted-foreground">
+        <nav className="hidden sm:flex items-center gap-6 font-mono text-xs text-muted-foreground">
           <Link href="/" className="hover:text-foreground transition-colors">LEADERBOARD</Link>
           <span className="text-foreground border-b border-buy pb-0.5">LIVE FEED</span>
         </nav>
       </header>
 
-      <main className="flex-1 px-6 py-8 max-w-3xl mx-auto w-full">
+      <main className="flex-1 px-4 sm:px-6 py-8 max-w-3xl mx-auto w-full">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-6">
           <div>
             <h1 className="font-mono text-lg font-semibold tracking-wider text-foreground">
               LIVE FEED
