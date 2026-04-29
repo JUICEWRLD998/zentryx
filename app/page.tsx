@@ -17,7 +17,7 @@ import {
 import { ThemeToggle } from "@/components/theme-toggle";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-const TELEGRAM_BOT_URL = "https://t.me/zentryxbot";
+const TELEGRAM_BOT_URL = "https://t.me/zentryxtrade_bot";
 
 interface Stats {
   whales: number;
