@@ -97,6 +97,7 @@ app = FastAPI(
 # CORS — allow Next.js dev server and Vercel deploy
 _allowed_origins = [
     "http://localhost:3000",
+    "https://zentryx-c3lali2b4-fadhmusty-1498s-projects.vercel.app",
     os.getenv("FRONTEND_URL", "http://localhost:3000"),
 ]
 
