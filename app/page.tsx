@@ -221,7 +221,7 @@ export default function Landing() {
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 rounded-lg border border-border font-mono font-semibold text-sm px-6 py-3 text-foreground hover:border-foreground/40 transition-colors"
               >
-                <Bot size={14} /> Join Telegram Bot
+                <Bot size={14} /> Use Telegram Bot
               </a>
             </div>
           </motion.div>
