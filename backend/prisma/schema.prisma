@@ -1,0 +1,127 @@
+// Zentryx — Prisma PostgreSQL schema
+//
+// Run from the backend/ directory:
+//   prisma generate          — generate Python client
+//   prisma db push           — apply schema to the database (dev, no migration files)
+//   prisma migrate dev       — create a migration file then apply (production)
+//
+// Connection string goes in backend/.env:
+//   DATABASE_URL="postgresql://user:password@localhost:5432/zentryx"
+
+generator client {
+  provider             = "prisma-client-py"
+  interface            = "asyncio"
+  recursive_type_depth = 5
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Tracked whale wallets (top 15, refreshed weekly by APScheduler)
+// ---------------------------------------------------------------------------
+model Wallet {
+  id         String   @id @default(uuid())
+  address    String   @unique
+  label      String
+  winRate    Float    @map("win_rate")
+  totalPnl   Float    @map("total_pnl")
+  tradeCount Int      @map("trade_count")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  snapshots      WalletSnapshot[]
+  tradeEvents    TradeEvent[]
+  watchlistItems UserWatchlist[]
+
+  @@map("wallet")
+}
+
+// ---------------------------------------------------------------------------
+// 6-hour historical metrics snapshots (for charts/analytics)
+// Index on (wallet_id, timestamp DESC) for fast charting queries.
+// ---------------------------------------------------------------------------
+model WalletSnapshot {
+  id            String   @id @default(uuid())
+  walletId      String   @map("wallet_id")
+  wallet        Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  timestamp     DateTime @default(now())
+  totalPnl      Float    @map("total_pnl")
+  realizedPnl   Float?   @map("realized_pnl")
+  unrealizedPnl Float?   @map("unrealized_pnl")
+  winRate       Float    @map("win_rate")
+  tradeCount    Int      @map("trade_count")
+  netWorthUsd   Float?   @map("net_worth_usd")
+
+  @@index([walletId, timestamp(sort: Desc)])
+  @@map("wallet_snapshot")
+}
+
+// ---------------------------------------------------------------------------
+// Live trade events — 30-day rolling retention, deduped by signature.
+// alertSent tracks whether a Telegram alert was fired for this trade.
+// ---------------------------------------------------------------------------
+model TradeEvent {
+  id             String    @id @default(uuid())
+  signature      String    @unique
+  walletId       String?   @map("wallet_id")
+  wallet         Wallet?   @relation(fields: [walletId], references: [id], onDelete: SetNull)
+  walletLabel    String?   @map("wallet_label")
+  tokenAddress   String    @map("token_address")
+  tokenSymbol    String?   @map("token_symbol")
+  side           TradeSide
+  usdValue       Float     @map("usd_value")
+  timestamp      DateTime
+  securityScore  Float?    @map("security_score")
+  isHoneypot     Boolean?  @map("is_honeypot")
+  smartMoneyFlag Boolean   @default(false) @map("smart_money_flag")
+  momentum24h    Float?    @map("momentum_24h")
+  holderCount    Int?      @map("holder_count")
+  buySellRatio   Float?    @map("buy_sell_ratio")
+  liquidityUsd   Float?    @map("liquidity_usd")
+  alertSent      Boolean   @default(false) @map("alert_sent")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@index([walletId, timestamp(sort: Desc)])
+  @@index([createdAt])
+  @@map("trade_event")
+}
+
+enum TradeSide {
+  BUY
+  SELL
+  UNKNOWN
+}
+
+// ---------------------------------------------------------------------------
+// Per-Telegram-user watchlists — each user can watch any tracked wallet.
+// No auth: Telegram user IDs are the unique identifier.
+// ---------------------------------------------------------------------------
+model UserWatchlist {
+  id             String   @id @default(uuid())
+  telegramUserId BigInt   @map("telegram_user_id")
+  walletId       String   @map("wallet_id")
+  wallet         Wallet   @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  addedAt        DateTime @default(now()) @map("added_at")
+
+  @@unique([telegramUserId, walletId])
+  @@index([telegramUserId])
+  @@map("user_watchlist")
+}
+
+// ---------------------------------------------------------------------------
+// Cached smart-money token list from Birdeye endpoint 13.
+// Refreshed at most once/hour — avoids 1 Birdeye call per trade event.
+// Cleanup: rows older than expires_at are deleted by the daily TTL job.
+// ---------------------------------------------------------------------------
+model SmartMoneyCache {
+  id             String   @id @default(uuid())
+  tokenAddresses String[]
+  cachedAt       DateTime @default(now()) @map("cached_at")
+  expiresAt      DateTime @map("expires_at")
+
+  @@index([expiresAt])
+  @@map("smart_money_cache")
+}

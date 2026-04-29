@@ -2,41 +2,106 @@
 Wallet discovery service.
 
 Calls Birdeye endpoint 1 (gainers-losers) for the week's top performers,
-gates each wallet through endpoint 2 (pnl/summary), filters to the top 15
-by win rate + absolute PnL, and stores them in a module-level dict.
+then batches PnL data via endpoint 3 (pnl/multiple) — one batch call
+instead of one-per-wallet — filters to the top 15 by win rate + PnL,
+stores them in a module-level dict, and upserts them into PostgreSQL.
 
-Rate-limit aware: PnL summaries are fetched with a semaphore (max 2 concurrent)
-and a small inter-request delay to avoid 429s on free-tier API keys.
+API call budget per discovery run (down from ~11 → 2 calls):
+  1 × get_gainers_losers       — endpoint 1
+  1 × get_wallet_pnl_multiple  — endpoint 3 (all addresses in one call)
+  ──────────────────────────────────────────────────────────────────
+  Total: 2 CU/week  (was ~11 CU with individual pnl/summary calls)
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 
+import db
 from models.schemas import TrackedWallet
 from services import birdeye
 
 logger = logging.getLogger(__name__)
 
-# In-memory store — address → TrackedWallet
+# In-memory store — address → TrackedWallet (populated on startup + weekly)
 tracked_wallets: dict[str, TrackedWallet] = {}
 
-# Semaphore to cap concurrent Birdeye calls during discovery
-# Free tier: ~1 req/sec per endpoint, so run sequentially with a 2s delay
-_SEMAPHORE = asyncio.Semaphore(1)
-_INTER_REQUEST_DELAY = 2.0  # seconds between each PnL summary call
+# Max addresses per pnl/multiple call (Birdeye free-tier safe limit)
+_BATCH_SIZE = 10
+_INTER_BATCH_DELAY = 2.0  # seconds between batch calls for rate limiting
 
 
-async def _fetch_pnl_summary(wallet_address: str) -> tuple[str, dict]:
-    """Return (address, raw summary dict) for a single wallet, or (address, {}) on error."""
-    async with _SEMAPHORE:
-        await asyncio.sleep(_INTER_REQUEST_DELAY)
+def _parse_pnl_item(item: dict) -> tuple[float, float, int]:
+    """
+    Parse (total_pnl, win_rate, trade_count) from a Birdeye PnL item.
+
+    Handles both the flat structure returned by /pnl/multiple and the nested
+    structure returned by /pnl/summary, so callers don't need to branch.
+    """
+    # Flat structure (pnl/multiple): direct fields on the item
+    total_pnl = float(
+        item.get("total_pnl") or item.get("pnl") or item.get("pnl_usd") or 0
+    )
+    win_rate = float(item.get("win_rate") or item.get("winRate") or 0)
+    trade_count = int(
+        item.get("trade_count") or item.get("total_trade") or item.get("total_trading") or 0
+    )
+
+    # If flat fields are all zero, try the nested summary structure
+    # (pnl/summary wraps everything under data.summary.pnl / data.summary.counts)
+    if total_pnl == 0 and win_rate == 0:
+        summary = item.get("summary") or {}
+        pnl_block = summary.get("pnl") or {}
+        counts_block = summary.get("counts") or {}
+        total_pnl = float(
+            pnl_block.get("realized_profit_usd") or pnl_block.get("total_usd") or 0
+        )
+        win_rate = float(counts_block.get("win_rate") or 0)
+        trade_count = int(
+            counts_block.get("total_trade") or counts_block.get("total_trading") or 0
+        )
+
+    return total_pnl, win_rate, trade_count
+
+
+async def _fetch_pnl_batch(addresses: list[str]) -> list[tuple[str, dict]]:
+    """
+    Call /wallet/v2/pnl/multiple for up to _BATCH_SIZE addresses.
+    Returns a list of (address, raw_item_dict) pairs.
+    Falls back to individual /pnl/summary calls if the batch endpoint fails.
+    """
+    await asyncio.sleep(_INTER_BATCH_DELAY)
+    try:
+        raw = await birdeye.get_wallet_pnl_multiple(addresses)
+        data = raw.get("data")
+
+        # Response shape: list of items with 'address' field
+        if isinstance(data, list):
+            return [
+                (item.get("address", ""), item)
+                for item in data
+                if item.get("address")
+            ]
+        # Response shape: dict keyed by address
+        if isinstance(data, dict):
+            return [(addr, data[addr]) for addr in addresses if addr in data]
+
+        logger.warning("Unexpected pnl/multiple response shape — falling back to individual calls.")
+    except Exception as exc:
+        logger.warning("Batch PnL call failed (%s) — falling back to individual calls.", exc)
+
+    # Fallback: individual pnl/summary calls for this batch
+    results: list[tuple[str, dict]] = []
+    for addr in addresses:
+        await asyncio.sleep(1.0)
         try:
-            data = await birdeye.get_wallet_pnl_summary(wallet_address)
-            return wallet_address, data
-        except Exception as exc:
-            logger.warning("PnL summary failed for %s: %s", wallet_address, exc)
-            return wallet_address, {}
+            raw = await birdeye.get_wallet_pnl_summary(addr)
+            data_block = raw.get("data") or {}
+            summary = data_block.get("summary") or {}
+            results.append((addr, summary))
+        except Exception as e:
+            logger.warning("Individual PnL fallback failed for %s: %s", addr[:8], e)
+    return results
 
 
 async def discover_wallets() -> None:
@@ -44,11 +109,12 @@ async def discover_wallets() -> None:
     Refresh the tracked wallet list.
 
     Steps:
-      1. Fetch top 50 weekly gainers (endpoint 1).
-      2. Concurrently fetch PnL summary for each (endpoint 2).
-      3. Filter: win_rate >= 0.55 AND total_pnl > 0.
+      1. Fetch top 10 weekly gainers (endpoint 1 — API max is 10 per call).
+      2. Batch-fetch PnL for all addresses in one call (endpoint 3).
+      3. Filter: win_rate >= 0.40 AND total_pnl > 0 AND trade_count >= 5.
       4. Sort by total_pnl desc, keep top 15.
-      5. Store in tracked_wallets with a human-readable label.
+      5. Update in-memory tracked_wallets dict.
+      6. Upsert all top 15 into the wallet DB table.
     """
     global tracked_wallets
     logger.info("Starting wallet discovery...")
@@ -58,13 +124,12 @@ async def discover_wallets() -> None:
             time_frame="1W",
             sort_by="PnL",
             sort_type="desc",
-            limit=50,
+            limit=50,  # capped to 10 by birdeye client (API max per call)
         )
     except Exception as exc:
         logger.error("Failed to fetch gainers-losers: %s", exc)
         return
 
-    # Extract wallet addresses from response
     data_block = gainers_raw.get("data") or {}
     items = data_block.get("items") or []
 
@@ -73,34 +138,43 @@ async def discover_wallets() -> None:
         return
 
     addresses = [item.get("address") for item in items if item.get("address")]
-    logger.info("Fetched %d candidate wallets, fetching PnL summaries...", len(addresses))
+    logger.info(
+        "Fetched %d candidate wallets — batch-fetching PnL data...", len(addresses)
+    )
 
-    # Concurrent PnL summary fetch for all candidates
-    results = await asyncio.gather(*[_fetch_pnl_summary(addr) for addr in addresses])
+    # ── Batch PnL fetch (replaces N individual pnl/summary calls) ─────────
+    batches = [
+        addresses[i : i + _BATCH_SIZE] for i in range(0, len(addresses), _BATCH_SIZE)
+    ]
+    all_results: list[tuple[str, dict]] = []
+    for batch in batches:
+        batch_results = await _fetch_pnl_batch(batch)
+        all_results.extend(batch_results)
 
+    # Build a lookup from gainers response for fallback values
+    gainers_lookup = {item.get("address"): item for item in items if item.get("address")}
+
+    # ── Filter & qualify ──────────────────────────────────────────────────
     qualified: list[dict] = []
-    for address, raw in results:
-        if not raw:
-            continue
-        # Birdeye v2 PnL summary structure:
-        # data.summary.pnl.realized_profit_usd (total PnL)
-        # data.summary.counts.win_rate
-        # data.summary.counts.total_trade
-        data_block = raw.get("data") or {}
-        summary = data_block.get("summary") or {}
-        pnl_block = summary.get("pnl") or {}
-        counts_block = summary.get("counts") or {}
+    for address, raw_item in all_results:
+        total_pnl, win_rate, trade_count = _parse_pnl_item(raw_item)
 
-        total_pnl = float(pnl_block.get("realized_profit_usd") or pnl_block.get("total_usd") or 0)
-        win_rate = float(counts_block.get("win_rate") or 0)
-        trade_count = int(counts_block.get("total_trade") or counts_block.get("total_trading") or 0)
+        # If batch returned zero values, try gainers-losers as fallback
+        if total_pnl == 0 and win_rate == 0:
+            fallback = gainers_lookup.get(address) or {}
+            total_pnl = float(
+                fallback.get("pnl") or fallback.get("pnl_usd") or 0
+            )
+            win_rate = float(fallback.get("win_rate") or fallback.get("winRate") or 0)
+            trade_count = int(
+                fallback.get("trade_count") or fallback.get("total_trading") or 0
+            )
 
         logger.info(
             "Wallet %s — pnl=%.2f win_rate=%.2f trades=%d",
             address[:8], total_pnl, win_rate, trade_count,
         )
 
-        # Phase 2: Relaxed filter for testing; Phase 3+ can tighten to win_rate >= 0.55
         if win_rate >= 0.40 and total_pnl > 0 and trade_count >= 5:
             qualified.append(
                 {
@@ -111,26 +185,29 @@ async def discover_wallets() -> None:
                 }
             )
 
-    # Fallback: if no wallets pass the filter, seed from gainers-losers directly
+    # Fallback: if nothing passes the filter, seed directly from gainers-losers
     if not qualified:
         logger.warning(
-            "No wallets passed PnL filter — seeding %d wallets from gainers-losers directly.", len(addresses)
+            "No wallets passed PnL filter — seeding %d from gainers-losers.", len(addresses)
         )
         for address in addresses[:15]:
-            item = next((i for i in items if i.get("address") == address), {})
+            item = gainers_lookup.get(address, {})
             qualified.append(
                 {
                     "address": address,
                     "total_pnl": float(item.get("pnl") or item.get("pnl_usd") or 0),
                     "win_rate": float(item.get("win_rate") or item.get("winRate") or 0),
-                    "trade_count": int(item.get("trade_count") or item.get("total_trading") or 0),
+                    "trade_count": int(
+                        item.get("trade_count") or item.get("total_trading") or 0
+                    ),
                 }
             )
 
-    # Sort by total_pnl descending, take top 15
+    # ── Sort & take top 15 ────────────────────────────────────────────────
     qualified.sort(key=lambda x: x["total_pnl"], reverse=True)
     top15 = qualified[:15]
 
+    # ── Update in-memory store ────────────────────────────────────────────
     new_wallets: dict[str, TrackedWallet] = {}
     for rank, wallet in enumerate(top15, start=1):
         new_wallets[wallet["address"]] = TrackedWallet(
@@ -144,7 +221,39 @@ async def discover_wallets() -> None:
     tracked_wallets = new_wallets
     logger.info("Wallet discovery complete — %d wallets tracked.", len(tracked_wallets))
 
+    # ── Persist to PostgreSQL (upsert) ────────────────────────────────────
+    if db.is_available():
+        upserted = 0
+        for rank, wallet in enumerate(top15, start=1):
+            label = f"Whale #{rank}"
+            try:
+                await db.prisma.wallet.upsert(
+                    where={"address": wallet["address"]},
+                    data={
+                        "create": {
+                            "address": wallet["address"],
+                            "label": label,
+                            "winRate": wallet["win_rate"],
+                            "totalPnl": wallet["total_pnl"],
+                            "tradeCount": wallet["trade_count"],
+                        },
+                        "update": {
+                            "label": label,
+                            "winRate": wallet["win_rate"],
+                            "totalPnl": wallet["total_pnl"],
+                            "tradeCount": wallet["trade_count"],
+                        },
+                    },
+                )
+                upserted += 1
+            except Exception as exc:
+                logger.warning(
+                    "DB upsert failed for %s: %s", wallet["address"][:8], exc
+                )
+        logger.info("Persisted %d/%d wallets to database.", upserted, len(top15))
+
 
 def get_tracked_wallets() -> list[TrackedWallet]:
     """Return current tracked wallets as a list, ordered by label."""
     return sorted(tracked_wallets.values(), key=lambda w: w.label)
+

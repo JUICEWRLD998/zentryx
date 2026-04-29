@@ -10,6 +10,9 @@ Supported commands (user types in the Telegram chat):
   /top [n]          — show top N wallets by PnL (default 5)
   /wallet [address] — look up a specific wallet by address (partial match ok)
   /filter [n%]      — filter whales with at least N% win rate
+  /watch [address]  — add a wallet to your personal watchlist
+  /unwatch [addr]   — remove a wallet from your watchlist
+  /my-wallets       — show your personal watchlist
   /help             — list all available commands
 """
 from __future__ import annotations
@@ -110,7 +113,61 @@ async def send_trade_alert(
         logger.warning("Telegram send failed: %s", exc)
 
 
-async def send_startup_message() -> None:
+async def send_personal_trade_alert(
+    *,
+    telegram_user_id: int,
+    wallet_label: str,
+    wallet_address: str,
+    token_symbol: str,
+    token_address: str,
+    side: str,
+    usd_value: float,
+    security_score: float | None,
+    smart_money: bool,
+    momentum_24h: float | None,
+) -> None:
+    """Send a trade alert DM to a specific Telegram user (watchlist notification)."""
+    bot = _get_bot()
+    if not bot:
+        return
+
+    side_emoji = "🚀" if side == "BUY" else "🔻"
+    momentum_str = f"{momentum_24h:+.1f}%" if momentum_24h is not None else "N/A"
+    usd_str = f"${usd_value:,.0f}"
+    token_url = f"https://birdeye.so/token/{token_address}?chain=solana"
+    solscan_url = f"https://solscan.io/account/{wallet_address}"
+
+    sec_str = (
+        f"{_security_emoji(security_score)} {security_score:.0f}/100"
+        if security_score is not None
+        else "⬜ N/A"
+    )
+
+    text = (
+        f"{side_emoji} <b>Watchlist Alert</b>\n"
+        f"\n"
+        f"<b>{wallet_label}</b> {side} <a href='{token_url}'>${token_symbol}</a>\n"
+        f"Value: <b>{usd_str}</b>\n"
+        f"\n"
+        f"Security: {sec_str}\n"
+        f"Smart Money: {'✅ Yes' if smart_money else '—'}\n"
+        f"Momentum: {momentum_str} (24h)\n"
+        f"\n"
+        f"<a href='{solscan_url}'>View wallet on Solscan</a>"
+    )
+
+    try:
+        await bot.send_message(
+            chat_id=telegram_user_id,
+            text=text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    except TelegramError as exc:
+        logger.debug("Personal alert to user %s failed: %s", telegram_user_id, exc)
+
+
+
     """Send a startup notification so you know the bot is alive."""
     bot = _get_bot()
     chat_id = _chat_id()
@@ -163,8 +220,12 @@ async def _handle_start(bot: Bot, update: Update) -> None:
         "/top [n] — top N wallets by PnL (e.g. /top 10)\n"
         "/wallet [address] — look up a specific wallet\n"
         "/filter [n%] — filter by min win rate (e.g. /filter 70)\n"
+        "/watch [address] — add a whale to your personal watchlist\n"
+        "/unwatch [address] — remove from your watchlist\n"
+        "/my-wallets — view your personal watchlist\n"
         "/help — show this message\n\n"
-        "Trade alerts appear here automatically when whales move $5,000+."
+        "Trade alerts appear here automatically when whales move $5,000+.\n"
+        "Watchlist alerts are sent directly to you as DMs."
     )
     await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
     logger.info("Responded to /start from chat %s (%s)", chat_id, name)
@@ -376,10 +437,196 @@ async def _handle_help(bot: Bot, update: Update) -> None:
         "/top [n] — top N wallets by PnL, default 5 (e.g. /top 10)\n"
         "/wallet [address] — look up a specific wallet (partial address ok)\n"
         "/filter [n%] — filter wallets by min win rate (e.g. /filter 70)\n"
+        "/watch [address] — add a whale to your personal watchlist\n"
+        "/unwatch [address] — remove a whale from your watchlist\n"
+        "/my-wallets — view your personal watchlist\n"
         "/help — show this message\n\n"
-        "🔔 Trade alerts are sent automatically when a tracked whale makes a $5,000+ trade."
+        "🔔 Trade alerts are sent automatically when a tracked whale makes a $5,000+ trade.\n"
+        "📩 Watchlist alerts are DM'd directly to you for wallets you /watch."
     )
     await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
+
+
+async def _handle_watch(bot: Bot, update: Update) -> None:
+    """Handle /watch <address> — add a tracked wallet to the user's personal watchlist."""
+    import db
+    chat_id = update.message.chat.id
+    telegram_user_id = update.message.from_user.id
+    parts = (update.message.text or "").strip().split()
+
+    if len(parts) < 2:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "ℹ️ Usage: <code>/watch [address]</code>\n"
+                "Example: <code>/watch Hm9qLg5w</code>\n\n"
+                "Use /wallets to see all tracked whale addresses."
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    query = parts[1].lower()
+    from services.wallet_discovery import get_tracked_wallets
+    wallets = get_tracked_wallets()
+    found = next(
+        (w for w in wallets if w.address.lower().startswith(query) or w.address.lower() == query),
+        None,
+    )
+
+    if not found:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"❌ No tracked wallet found matching <code>{query}</code>.\n\n"
+                "Use /wallets to see all tracked addresses."
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    if not db.is_available():
+        await bot.send_message(
+            chat_id=chat_id,
+            text="⚠️ Watchlist unavailable — database not connected.",
+            parse_mode="HTML",
+        )
+        return
+
+    db_wallet = await db.prisma.wallet.find_unique(where={"address": found.address})
+    if not db_wallet:
+        await bot.send_message(
+            chat_id=chat_id,
+            text="❌ Wallet not found in database yet. Try again after next discovery.",
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        await db.prisma.userwatchlist.create(
+            data={"telegramUserId": telegram_user_id, "walletId": db_wallet.id}
+        )
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"✅ <b>{found.label}</b> added to your watchlist!\n\n"
+                f"You'll receive a personal DM whenever this whale makes a $5,000+ trade.\n"
+                f"Use /my-wallets to see your full watchlist."
+            ),
+            parse_mode="HTML",
+        )
+        logger.info("User %s added %s to watchlist.", telegram_user_id, found.label)
+    except Exception:
+        # Unique constraint violation = already watching
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"ℹ️ You're already watching <b>{found.label}</b>.",
+            parse_mode="HTML",
+        )
+
+
+async def _handle_unwatch(bot: Bot, update: Update) -> None:
+    """Handle /unwatch <address> — remove a wallet from the user's watchlist."""
+    import db
+    chat_id = update.message.chat.id
+    telegram_user_id = update.message.from_user.id
+    parts = (update.message.text or "").strip().split()
+
+    if len(parts) < 2:
+        await bot.send_message(
+            chat_id=chat_id,
+            text="ℹ️ Usage: <code>/unwatch [address]</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    if not db.is_available():
+        await bot.send_message(
+            chat_id=chat_id,
+            text="⚠️ Watchlist unavailable — database not connected.",
+            parse_mode="HTML",
+        )
+        return
+
+    query = parts[1].lower()
+    db_wallet = await db.prisma.wallet.find_first(
+        where={"address": {"startswith": query}}
+    )
+    if not db_wallet:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"❌ No wallet found matching <code>{query}</code>.",
+            parse_mode="HTML",
+        )
+        return
+
+    deleted = await db.prisma.userwatchlist.delete_many(
+        where={"telegramUserId": telegram_user_id, "walletId": db_wallet.id}
+    )
+
+    if deleted:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"✅ <b>{db_wallet.label}</b> removed from your watchlist.",
+            parse_mode="HTML",
+        )
+        logger.info("User %s removed %s from watchlist.", telegram_user_id, db_wallet.label)
+    else:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"ℹ️ <b>{db_wallet.label}</b> wasn't in your watchlist.",
+            parse_mode="HTML",
+        )
+
+
+async def _handle_my_wallets(bot: Bot, update: Update) -> None:
+    """Handle /my-wallets — display the user's personal watchlist."""
+    import db
+    chat_id = update.message.chat.id
+    telegram_user_id = update.message.from_user.id
+
+    if not db.is_available():
+        await bot.send_message(
+            chat_id=chat_id,
+            text="⚠️ Watchlist unavailable — database not connected.",
+            parse_mode="HTML",
+        )
+        return
+
+    items = await db.prisma.userwatchlist.find_many(
+        where={"telegramUserId": telegram_user_id},
+        include={"wallet": True},
+        order={"addedAt": "asc"},
+    )
+
+    if not items:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "📋 Your watchlist is empty.\n\n"
+                "Use <code>/watch [address]</code> to add a whale.\n"
+                "Try /wallets to see all tracked addresses."
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    lines = [f"📋 <b>Your Watchlist ({len(items)} wallet{'s' if len(items) != 1 else ''})</b>\n"]
+    for i, item in enumerate(items, start=1):
+        w = item.wallet
+        pnl_str = f"${w.totalPnl:,.0f}" if w.totalPnl >= 0 else f"-${abs(w.totalPnl):,.0f}"
+        lines.append(
+            f"#{i} <b>{w.label}</b> — {pnl_str} | {w.winRate * 100:.0f}% win\n"
+            f"<code>{w.address[:20]}...</code>"
+        )
+    lines.append("\nUse <code>/unwatch [address]</code> to remove a wallet.")
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text="\n\n".join(lines),
+        parse_mode="HTML",
+    )
+    logger.info("Responded to /my-wallets from user %s — %d items.", telegram_user_id, len(items))
 
 
 async def _dispatch(bot: Bot, update: Update) -> None:
@@ -412,6 +659,12 @@ async def _dispatch(bot: Bot, update: Update) -> None:
         await _handle_wallet_lookup(bot, update)
     elif text.startswith("/filter"):
         await _handle_filter(bot, update)
+    elif text.startswith("/watch ") or text == "/watch":
+        await _handle_watch(bot, update)
+    elif text.startswith("/unwatch ") or text == "/unwatch":
+        await _handle_unwatch(bot, update)
+    elif text.startswith("/my-wallets") or text == "/my-wallets":
+        await _handle_my_wallets(bot, update)
     # Unknown commands silently ignored
 
 

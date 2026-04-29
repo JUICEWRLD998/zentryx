@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()  # Load backend/.env before any service initializes
 
+import db
 from routers.wallets import router as wallets_router
 from routers.ws import router as ws_router
 from scheduler import scheduler
@@ -47,6 +48,10 @@ async def lifespan(app: FastAPI):
     global _ws_task, _poll_task
     # ── Startup ────────────────────────────────────────────────────────────
     logger.info("Zentryx backend starting up...")
+
+    # Connect to PostgreSQL (gracefully skips if DATABASE_URL not set)
+    await db.connect()
+
     scheduler.start()
     logger.info("Scheduler started. Running initial wallet discovery...")
     await discover_wallets()
@@ -76,6 +81,7 @@ async def lifespan(app: FastAPI):
     if _bot_task and not _bot_task.done():
         _bot_task.cancel()
     scheduler.shutdown(wait=False)
+    await db.disconnect()
     logger.info("Zentryx backend shut down.")
 
 

@@ -1,14 +1,18 @@
 """
-WebSocket router — Phase 3.
+WebSocket router — Phase 3 + DB-backed trade feed.
 
-Exposes GET /api/tokens/{address}/mini-report (REST, Phase 5 preview)
-and WS /ws/feed for live trade broadcasts to frontend clients.
+Exposes:
+  WS  /ws/feed                          — live trade broadcast to frontend clients
+  GET /api/tokens/{address}/mini-report — on-demand token mini-report (REST)
+  GET /api/trades                       — recent trade events from DB (feed reconstruction)
 """
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+import db
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from models.schemas import TokenMiniReport
 from services.enrichment import build_mini_report
@@ -28,8 +32,6 @@ async def ws_feed(websocket: WebSocket) -> None:
     """
     await manager.connect(websocket)
     try:
-        # Keep the connection open; we only push data server→client.
-        # We still await messages to detect disconnects.
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
@@ -47,3 +49,51 @@ async def token_mini_report(address: str) -> TokenMiniReport:
     Used by the frontend slide-over when a user clicks a trade card.
     """
     return await build_mini_report(address)
+
+
+@router.get("/api/trades")
+async def recent_trades(
+    limit: int = Query(default=50, ge=1, le=200),
+    hours: int = Query(default=24, ge=1, le=720, description="How many hours back to fetch"),
+) -> dict:
+    """
+    Return recent trade events from PostgreSQL for feed reconstruction.
+    Used by the frontend to pre-populate the live feed on page load.
+    Gracefully returns an empty list when DB is unavailable.
+    """
+    if not db.is_available():
+        return {"trades": [], "db_available": False}
+
+    since = datetime.now(tz=timezone.utc) - timedelta(hours=hours)
+
+    trades = await db.prisma.tradeevent.find_many(
+        where={"timestamp": {"gte": since}},
+        order={"timestamp": "desc"},
+        take=limit,
+        include={"wallet": True},
+    )
+
+    return {
+        "db_available": True,
+        "trades": [
+            {
+                "id": t.id,
+                "signature": t.signature,
+                "wallet_address": t.wallet.address if t.wallet else None,
+                "wallet_label": t.walletLabel,
+                "token_address": t.tokenAddress,
+                "token_symbol": t.tokenSymbol,
+                "side": t.side,
+                "usd_value": t.usdValue,
+                "timestamp": t.timestamp.isoformat(),
+                "security_score": t.securityScore,
+                "is_honeypot": t.isHoneypot,
+                "smart_money_flag": t.smartMoneyFlag,
+                "momentum_24h": t.momentum24h,
+                "holder_count": t.holderCount,
+                "buy_sell_ratio": t.buySellRatio,
+                "liquidity_usd": t.liquidityUsd,
+            }
+            for t in trades
+        ],
+    }
