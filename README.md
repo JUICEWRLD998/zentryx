@@ -33,7 +33,7 @@ Zentryx automatically discovers the top-performing wallets on Solana, tracks the
 | **Token Intelligence** | Security scoring, honeypot detection, smart money signals, liquidity, and momentum per token |
 | **PostgreSQL Persistence** | Wallets, 6-hour snapshots, 30-day trade events, and watchlists stored in Prisma Cloud |
 | **Telegram Bot** | 10 commands covering leaderboard, stats, alerts, and personal watchlists |
-| **Personal Watchlists** | Users subscribe to specific wallets and receive DM alerts on every large trade |
+| **Personal Watchlists** | Users subscribe to specific wallets and receive DM alerts on every $2,000+ trade |
 | **Startup Notification** | Bot sends a ping on every backend boot (0 compute units) |
 | **Dark / Light Mode** | Terminal-aesthetic dark default with a clean light-mode toggle |
 
@@ -298,7 +298,7 @@ Built with `python-telegram-bot`. All commands read from PostgreSQL or in-memory
 🟢 Zentryx is online. Monitoring live trades on Solana.
 ```
 
-**Trade alert** — broadcast to `TELEGRAM_CHAT_ID` when a $5,000+ trade is detected:
+**Trade alert** — broadcast to `TELEGRAM_CHAT_ID` when a $2,000+ trade is detected:
 ```
 🐋 Whale #1 — BUY
 Token: $BONK
@@ -518,7 +518,23 @@ The polling worker monitors 6 tokens at a 1,200-second interval (reduced from 30
    - `NEXT_PUBLIC_WS_URL` — your backend WebSocket URL (`wss://` in production)
 4. Deploy — Vercel rebuilds on every push to `main`
 
-### Backend — Railway / Fly.io
+### Backend — Render
+
+1. Create a new Web Service on [render.com](https://render.com)
+2. Connect your GitHub repository
+3. Set the root directory to `backend`
+4. Add environment variables:
+   - `DATABASE_URL` — PostgreSQL connection string
+   - `BIRDEYE_API_KEY` — Birdeye API key (free tier)
+   - `TELEGRAM_BOT_TOKEN` — Telegram bot token from @BotFather
+   - `TELEGRAM_CHAT_ID` — Your Telegram chat ID
+5. Set the start command:
+   ```
+   uvicorn main:app --host 0.0.0.0 --port $PORT
+   ```
+6. Deploy — Render redeploys automatically on GitHub pushes to `main`
+
+### Backend — Railway / Fly.io (Alternative)
 
 1. Create a new project and connect the GitHub repository
 2. Set the root directory to `/backend`
