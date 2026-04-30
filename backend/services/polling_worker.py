@@ -65,10 +65,30 @@ async def _poll_token(token: dict, tracked_wallet_addrs: set[str], on_event) -> 
     total = len(txs)
     skipped_dup = skipped_stale = skipped_usd = emitted = 0
 
+    # Log raw keys of first tx once per token to diagnose field name mismatches
+    if txs:
+        logger.info("[%s] first tx keys: %s", symbol, list(txs[0].keys()))
+
     for tx in txs:
-        # Deduplicate
-        tx_hash = tx.get("txHash") or tx.get("hash") or tx.get("signature") or ""
-        if not tx_hash or tx_hash in _seen_tx_ids:
+        # Deduplicate — try every known Birdeye field name variant for the tx hash
+        tx_hash = (
+            tx.get("txHash")
+            or tx.get("tx_hash")
+            or tx.get("hash")
+            or tx.get("signature")
+            or tx.get("id")
+            or tx.get("transactionHash")
+            or ""
+        )
+        if not tx_hash:
+            # Unknown hash field — log once at warning level so we can adapt
+            logger.warning(
+                "[%s] tx has no recognised hash field; available keys: %s",
+                symbol, list(tx.keys()),
+            )
+            skipped_dup += 1
+            continue
+        if tx_hash in _seen_tx_ids:
             skipped_dup += 1
             continue
 
