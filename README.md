@@ -19,6 +19,7 @@ Zentryx automatically discovers the top-performing wallets on Solana, tracks the
 - [Project Structure](#project-structure)
 - [Quota & Cost Optimisation](#quota--cost-optimisation)
 - [Deployment](#deployment)
+- [Future Improvements](#future-improvements)
 - [License](#license)
 
 ---
@@ -545,6 +546,53 @@ The polling worker monitors 6 tokens at a 1,200-second interval (reduced from 30
    ```
 
 > Use `wss://` (not `ws://`) for the WebSocket URL in production.
+
+---
+
+## Future Improvements
+
+### 1. **Birdeye WebSocket Upgrade (Paid API Plan)**
+
+**Current:** REST polling every 20 minutes on 6 monitored tokens (free tier fallback)
+
+**Improvement:** Upgrade to Birdeye paid API plan to unlock WebSocket access (`wss://public-api.birdeye.so/socket`). This enables:
+- Real-time trade detection instead of 20-minute delays
+- Per-wallet transaction subscriptions (all whales, all tokens)
+- Sub-second latency for copy trading signals
+- Reduced REST polling overhead (immediate data source)
+
+**Impact:** 
+- Trading margin increases from 20 min to near-real-time
+- Capture whale trades on any token, not just the 6 monitored ones
+- Full copy trading accuracy
+
+### 2. **Wallet Discovery Frequency (Weekly → Daily or 2x/Week)**
+
+**Current:** Top-15 whale discovery runs every Sunday (weekly)
+
+**Improvement:** Increase discovery frequency to:
+- **2x/week** (Sunday + Wednesday) to catch mid-week momentum shifts
+- **Daily** for ultra-responsive leaderboard updates
+
+**Impact:**
+- Identify emerging whale performers faster
+- Reduce lag when a whale's PnL changes dramatically mid-week
+- More accurate tracking of volatile market conditions
+
+### 3. **Automated Copy Trading Execution**
+
+**Current:** Zentryx detects whale trades and alerts users; users manually execute trades
+
+**Improvement:** Implement automated trade mirroring:
+- User connects Solana wallet (via phantom.app or similar)
+- Set allocation strategy (fixed $X per whale trade, or % of detected trade size)
+- Zentryx automatically executes matching swaps on your behalf
+- Backtesting mode to simulate trades before going live
+
+**Impact:**
+- Eliminate manual execution delay (human reaction time removed)
+- Precise position sizing and risk management
+- Quantifiable historical returns vs whale performance
 
 ---
 
