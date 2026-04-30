@@ -224,7 +224,7 @@ async def _handle_start(bot: Bot, update: Update) -> None:
         "/unwatch [address] — remove from your watchlist\n"
         "/my-wallets — view your personal watchlist\n"
         "/help — show this message\n\n"
-        "Trade alerts appear here automatically when whales move $5,000+.\n"
+        "Trade alerts appear here automatically when whales move $2,000+.\n"
         "Watchlist alerts are sent directly to you as DMs."
     )
     await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
@@ -441,7 +441,7 @@ async def _handle_help(bot: Bot, update: Update) -> None:
         "/unwatch [address] — remove a whale from your watchlist\n"
         "/my-wallets — view your personal watchlist\n"
         "/help — show this message\n\n"
-        "🔔 Trade alerts are sent automatically when a tracked whale makes a $5,000+ trade.\n"
+        "🔔 Trade alerts are sent automatically when a tracked whale makes a $2,000+ trade.\n"
         "📩 Watchlist alerts are DM'd directly to you for wallets you /watch."
     )
     await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
@@ -510,7 +510,7 @@ async def _handle_watch(bot: Bot, update: Update) -> None:
             chat_id=chat_id,
             text=(
                 f"✅ <b>{found.label}</b> added to your watchlist!\n\n"
-                f"You'll receive a personal DM whenever this whale makes a $5,000+ trade.\n"
+                f"You'll receive a personal DM whenever this whale makes a $2,000+ trade.\n"
                 f"Use /my-wallets to see your full watchlist."
             ),
             parse_mode="HTML",
