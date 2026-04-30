@@ -85,16 +85,18 @@ async def send_trade_alert(
     solscan_url = f"https://solscan.io/account/{wallet_address}"
     token_url = f"https://birdeye.so/token/{token_address}?chain=solana"
 
+    sec_str = (
+        f"{_security_emoji(security_score)} "
+        f"{'Safe' if (security_score or 0) >= 70 else 'Caution' if (security_score or 0) >= 40 else 'Risky'}"
+        + (f" ({security_score:.0f}/100)" if security_score is not None else "")
+    )
     text = (
         f"{side_emoji} <b>Zentryx Signal</b>\n"
         f"\n"
         f"<b>{wallet_label}</b> {side} <a href='{token_url}'>${token_symbol}</a>\n"
         f"Value: <b>{usd_str}</b>\n"
         f"\n"
-        f"Security: {_security_emoji(security_score)} "
-        f"{'Safe' if (security_score or 0) >= 70 else 'Caution' if (security_score or 0) >= 40 else 'Risky'}"
-        f" ({security_score:.0f}/100)" if security_score is not None else ""
-        f"\n"
+        f"Security: {sec_str}\n"
         f"Smart Money: {'✅ Yes' if smart_money else '—'}\n"
         f"Momentum: {momentum_str} (24h)\n"
         f"\n"
@@ -629,6 +631,28 @@ async def _handle_my_wallets(bot: Bot, update: Update) -> None:
     logger.info("Responded to /my-wallets from user %s — %d items.", telegram_user_id, len(items))
 
 
+async def _handle_test_alert(bot: Bot, update: Update) -> None:
+    """Handle /test_alert — send a mock trade alert to verify formatting."""
+    chat_id = update.message.chat.id
+    await bot.send_message(
+        chat_id=chat_id,
+        text="🔄 Sending test alert to channel...",
+        parse_mode="HTML",
+    )
+    await send_trade_alert(
+        wallet_label="Whale #1 (Test)",
+        wallet_address="So11111111111111111111111111111111111111112",
+        token_symbol="SOL",
+        token_address="So11111111111111111111111111111111111111112",
+        side="BUY",
+        usd_value=5500.0,
+        security_score=72.0,
+        smart_money=True,
+        momentum_24h=8.5,
+    )
+    logger.info("Test alert triggered by chat %s", chat_id)
+
+
 async def _dispatch(bot: Bot, update: Update) -> None:
     """Route an incoming Update to the correct command handler."""
     msg = update.message
@@ -665,6 +689,8 @@ async def _dispatch(bot: Bot, update: Update) -> None:
         await _handle_unwatch(bot, update)
     elif text.startswith("/my-wallets") or text == "/my-wallets":
         await _handle_my_wallets(bot, update)
+    elif text.startswith("/test_alert") or text == "/test_alert":
+        await _handle_test_alert(bot, update)
     # Unknown commands silently ignored
 
 
