@@ -36,7 +36,7 @@ const FEATURES = [
     icon: Activity,
     title: "Live Trade Feed",
     description:
-      "Watch whale trades hit the blockchain in real time. Every $5,000+ move surfaces instantly in the live feed.",
+      "Watch whale trades hit the blockchain in real time. Every $2,000+ move surfaces instantly in the live feed.",
     href: "/live",
     cta: "Open Feed →",
     accent: "text-buy",

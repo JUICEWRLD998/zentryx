@@ -380,7 +380,7 @@ export default function LivePage() {
           {events.length === 0 ? (
             <div className="rounded-lg border border-border bg-card p-10 text-center font-mono text-sm text-muted-foreground">
               {status === "connected"
-                ? "Waiting for large trades ($5K+ on SOL, USDC, BONK, WIF, JUP, PYTH)..."
+                ? "Waiting for large trades ($2K+ on SOL, USDC, BONK, WIF, JUP, PYTH)..."
                 : "Connecting to live feed..."}
             </div>
           ) : (
