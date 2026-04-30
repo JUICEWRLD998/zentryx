@@ -54,4 +54,4 @@ async def disconnect() -> None:
 
 def is_available() -> bool:
     """Return True if the database is reachable and the client is connected."""
-    return _db_available
+    return _db_available and prisma.is_connected()
