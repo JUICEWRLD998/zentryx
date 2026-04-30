@@ -2,8 +2,10 @@ services:
   - type: web
     name: zentryx-backend
     runtime: python
-    buildCommand: cd backend && pip install -r requirements.txt && prisma generate && prisma py fetch
+    buildCommand: cd backend && pip install -r requirements.txt && prisma generate
     startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.0"
+      - key: PRISMA_CLI_BINARY_TARGETS
+        value: "debian-openssl-3.0.x"
