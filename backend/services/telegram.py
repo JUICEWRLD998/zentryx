@@ -705,7 +705,7 @@ async def run_bot_command_loop() -> None:
         logger.warning("Telegram bot token not set — command loop disabled.")
         return
 
-    logger.info("Telegram command loop started — listening for /start, /wallets, /stats, /top, /wallet, /filter, /help")
+    logger.info("Telegram command loop started — listening for /start, /wallets, /stats, /top, /wallet, /filter, /watch, /unwatch, /my-wallets, /help")
     offset: int | None = None
 
     while True:
