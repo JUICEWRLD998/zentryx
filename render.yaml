@@ -3,7 +3,7 @@ services:
     name: zentryx-backend
     runtime: python
     rootDir: backend
-    buildCommand: pip install -r requirements.txt && prisma generate
+    buildCommand: pip install -r requirements.txt && prisma generate && prisma py fetch
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
