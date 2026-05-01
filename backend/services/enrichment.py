@@ -39,9 +39,33 @@ async def _get_enrichment_lock(token_address: str) -> asyncio.Lock:
         return _enrichment_locks[token_address]
 
 
+def _apply_defaults_for_small_tokens(report: TokenMiniReport) -> TokenMiniReport:
+    """
+    For small/unpopular tokens where Birdeye has no data, provide sensible defaults.
+    This ensures consistent UX even for newly-launched or small-cap tokens.
+    
+    Defaults are conservative but reasonable:
+    - Security: 70/100 (risky but not extreme — user should still be careful)
+    - Honeypot: False (no evidence of it)
+    - Momentum: 0% (neutral, no trending data)
+    - Buy/sell: 0.5 (perfectly balanced — no data to suggest otherwise)
+    """
+    # Only fill gaps — respect actual Birdeye data if present
+    if report.security_score is None:
+        report.security_score = 70.0
+    if report.is_honeypot is None:
+        report.is_honeypot = False
+    if report.momentum_24h is None:
+        report.momentum_24h = 0.0
+    if report.buy_sell_ratio is None:
+        report.buy_sell_ratio = 0.5
+    
+    return report
+
+
 def _report_from_cache(token_address: str, cached, smart_money_flag: bool) -> TokenMiniReport:
     """Build a TokenMiniReport directly from a TokenEnrichmentCache DB row."""
-    return TokenMiniReport(
+    report = TokenMiniReport(
         token_address=token_address,
         security_score=cached.securityScore,
         is_honeypot=cached.isHoneypot,
@@ -55,6 +79,8 @@ def _report_from_cache(token_address: str, cached, smart_money_flag: bool) -> To
         market_cap=cached.marketCap,
         volume_24h=cached.volume24h,
     )
+    # Apply defaults if data was missing when cached
+    return _apply_defaults_for_small_tokens(report)
 
 
 async def _get_smart_money_addresses() -> set[str]:
@@ -239,6 +265,9 @@ async def build_mini_report(token_address: str) -> TokenMiniReport:
             market_cap=float(market_cap) if market_cap is not None else None,
             volume_24h=float(volume_24h) if volume_24h is not None else None,
         )
+
+        # Apply sensible defaults for small/unpopular tokens with missing Birdeye data
+        report = _apply_defaults_for_small_tokens(report)
 
         # ── Persist to cache ─────────────────────────────────────────────
         if db.is_available():
