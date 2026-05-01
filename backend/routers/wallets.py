@@ -12,7 +12,12 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
+import uuid
+
+from sqlalchemy import select
+
 import db
+from db import wallet_table, wallet_snapshot_table, get_session
 from fastapi import APIRouter, Query
 
 from models.schemas import LeaderboardEntry
@@ -61,14 +66,24 @@ async def wallet_history(
 
     since = datetime.now(tz=timezone.utc) - timedelta(days=days)
 
-    db_wallet = await db.prisma.wallet.find_unique(where={"address": address})
+    async with get_session() as session:
+        result = await session.execute(
+            select(wallet_table).where(wallet_table.c.address == address)
+        )
+        db_wallet = result.fetchone()
     if not db_wallet:
         return {"address": address, "snapshots": []}
 
-    snapshots = await db.prisma.walletsnapshot.find_many(
-        where={"walletId": db_wallet.id, "timestamp": {"gte": since}},
-        order={"timestamp": "asc"},
-    )
+    async with get_session() as session:
+        result = await session.execute(
+            select(wallet_snapshot_table)
+            .where(
+                wallet_snapshot_table.c.wallet_id == db_wallet.id,
+                wallet_snapshot_table.c.timestamp >= since,
+            )
+            .order_by(wallet_snapshot_table.c.timestamp.asc())
+        )
+        snapshots = result.fetchall()
 
     return {
         "address": address,
@@ -76,12 +91,12 @@ async def wallet_history(
         "snapshots": [
             {
                 "timestamp": s.timestamp.isoformat(),
-                "total_pnl": s.totalPnl,
-                "realized_pnl": s.realizedPnl,
-                "unrealized_pnl": s.unrealizedPnl,
-                "win_rate": s.winRate,
-                "trade_count": s.tradeCount,
-                "net_worth_usd": s.netWorthUsd,
+                "total_pnl": s.total_pnl,
+                "realized_pnl": s.realized_pnl,
+                "unrealized_pnl": s.unrealized_pnl,
+                "win_rate": s.win_rate,
+                "trade_count": s.trade_count,
+                "net_worth_usd": s.net_worth_usd,
             }
             for s in snapshots
         ],

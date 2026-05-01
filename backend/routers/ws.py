@@ -64,14 +64,19 @@ async def recent_trades(
     if not db.is_available():
         return {"trades": [], "db_available": False}
 
+    from sqlalchemy import select
+    from db import trade_event_table, wallet_table, get_session
+
     since = datetime.now(tz=timezone.utc) - timedelta(hours=hours)
 
-    trades = await db.prisma.tradeevent.find_many(
-        where={"timestamp": {"gte": since}},
-        order={"timestamp": "desc"},
-        take=limit,
-        include={"wallet": True},
-    )
+    async with get_session() as session:
+        result = await session.execute(
+            select(trade_event_table)
+            .where(trade_event_table.c.timestamp >= since)
+            .order_by(trade_event_table.c.timestamp.desc())
+            .limit(limit)
+        )
+        trades = result.fetchall()
 
     return {
         "db_available": True,
@@ -79,20 +84,20 @@ async def recent_trades(
             {
                 "id": t.id,
                 "signature": t.signature,
-                "wallet_address": t.wallet.address if t.wallet else None,
-                "wallet_label": t.walletLabel,
-                "token_address": t.tokenAddress,
-                "token_symbol": t.tokenSymbol,
+                "wallet_address": None,
+                "wallet_label": t.wallet_label,
+                "token_address": t.token_address,
+                "token_symbol": t.token_symbol,
                 "side": t.side,
-                "usd_value": t.usdValue,
+                "usd_value": t.usd_value,
                 "timestamp": t.timestamp.isoformat(),
-                "security_score": t.securityScore,
-                "is_honeypot": t.isHoneypot,
-                "smart_money_flag": t.smartMoneyFlag,
-                "momentum_24h": t.momentum24h,
-                "holder_count": t.holderCount,
-                "buy_sell_ratio": t.buySellRatio,
-                "liquidity_usd": t.liquidityUsd,
+                "security_score": t.security_score,
+                "is_honeypot": t.is_honeypot,
+                "smart_money_flag": t.smart_money_flag,
+                "momentum_24h": t.momentum_24h,
+                "holder_count": t.holder_count,
+                "buy_sell_ratio": t.buy_sell_ratio,
+                "liquidity_usd": t.liquidity_usd,
             }
             for t in trades
         ],

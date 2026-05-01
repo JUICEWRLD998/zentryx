@@ -14,9 +14,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import select, delete
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
 import db
+from db import wallet_table, wallet_snapshot_table, trade_event_table, token_enrichment_cache_table, get_session
 from services import birdeye
 
 logger = logging.getLogger(__name__)
@@ -87,26 +92,32 @@ async def take_wallet_snapshots() -> None:
                 logger.debug("Net worth fetch failed for %s: %s", wallet.address[:8], exc)
 
             # ── Resolve DB wallet record ─────────────────────────────────
-            db_wallet = await db.prisma.wallet.find_unique(
-                where={"address": wallet.address}
-            )
+            async with get_session() as session:
+                result = await session.execute(
+                    select(wallet_table).where(wallet_table.c.address == wallet.address)
+                )
+                db_wallet = result.fetchone()
             if not db_wallet:
                 logger.warning(
                     "Snapshot: wallet %s not in DB — skipping.", wallet.address[:8]
                 )
                 continue
 
-            await db.prisma.walletsnapshot.create(
-                data={
-                    "walletId": db_wallet.id,
-                    "totalPnl": total_pnl,
-                    "realizedPnl": realized_pnl,
-                    "unrealizedPnl": unrealized_pnl,
-                    "winRate": win_rate,
-                    "tradeCount": trade_count,
-                    "netWorthUsd": net_worth_usd,
-                }
-            )
+            now_ts = datetime.now(tz=timezone.utc)
+            async with get_session() as session:
+                await session.execute(
+                    pg_insert(wallet_snapshot_table).values(
+                        id=str(uuid.uuid4()),
+                        wallet_id=db_wallet.id,
+                        timestamp=now_ts,
+                        total_pnl=total_pnl,
+                        realized_pnl=realized_pnl,
+                        unrealized_pnl=unrealized_pnl,
+                        win_rate=win_rate,
+                        trade_count=trade_count,
+                        net_worth_usd=net_worth_usd,
+                    )
+                )
             snapped += 1
             logger.info(
                 "Snapshot saved: %s | pnl=%.2f | win=%.2f | worth=%s",
@@ -133,9 +144,11 @@ async def cleanup_old_trades() -> None:
 
     cutoff = datetime.now(tz=timezone.utc) - timedelta(days=30)
     try:
-        count = await db.prisma.tradeevent.delete_many(
-            where={"createdAt": {"lt": cutoff}}
-        )
+        async with get_session() as session:
+            result = await session.execute(
+                delete(trade_event_table).where(trade_event_table.c.created_at < cutoff)
+            )
+            count = result.rowcount
         logger.info("TTL cleanup: deleted %d trade events older than 30 days.", count)
     except Exception as exc:
         logger.warning("TTL cleanup (trades) failed: %s", exc)
@@ -143,9 +156,12 @@ async def cleanup_old_trades() -> None:
     # Purge expired token enrichment cache rows
     now = datetime.now(tz=timezone.utc)
     try:
-        count = await db.prisma.tokenenrichmentcache.delete_many(
-            where={"expiresAt": {"lt": now}}
-        )
+        async with get_session() as session:
+            result = await session.execute(
+                delete(token_enrichment_cache_table)
+                .where(token_enrichment_cache_table.c.expires_at < now)
+            )
+            count = result.rowcount
         if count:
             logger.info("TTL cleanup: deleted %d expired token enrichment cache rows.", count)
     except Exception as exc:

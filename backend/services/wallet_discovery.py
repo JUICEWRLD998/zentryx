@@ -16,8 +16,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 import db
+from db import wallet_table, get_session
 from models.schemas import TrackedWallet
 from services import birdeye
 
@@ -239,27 +244,35 @@ async def discover_wallets() -> None:
     # ── Persist to PostgreSQL (upsert) ────────────────────────────────────
     if db.is_available():
         upserted = 0
+        now = datetime.now(tz=timezone.utc)
         for rank, wallet in enumerate(top15, start=1):
             label = f"Whale #{rank}"
             try:
-                await db.prisma.wallet.upsert(
-                    where={"address": wallet["address"]},
-                    data={
-                        "create": {
-                            "address": wallet["address"],
+                stmt = (
+                    pg_insert(wallet_table)
+                    .values(
+                        id=str(uuid.uuid4()),
+                        address=wallet["address"],
+                        label=label,
+                        win_rate=wallet["win_rate"],
+                        total_pnl=wallet["total_pnl"],
+                        trade_count=wallet["trade_count"],
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    .on_conflict_do_update(
+                        index_elements=["address"],
+                        set_={
                             "label": label,
-                            "winRate": wallet["win_rate"],
-                            "totalPnl": wallet["total_pnl"],
-                            "tradeCount": wallet["trade_count"],
+                            "win_rate": wallet["win_rate"],
+                            "total_pnl": wallet["total_pnl"],
+                            "trade_count": wallet["trade_count"],
+                            "updated_at": now,
                         },
-                        "update": {
-                            "label": label,
-                            "winRate": wallet["win_rate"],
-                            "totalPnl": wallet["total_pnl"],
-                            "tradeCount": wallet["trade_count"],
-                        },
-                    },
+                    )
                 )
+                async with get_session() as session:
+                    await session.execute(stmt)
                 upserted += 1
             except Exception as exc:
                 logger.warning(

@@ -24,6 +24,8 @@ import time
 
 from telegram import Bot, Update
 from telegram.error import TelegramError
+from sqlalchemy import select, delete
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,29 @@ def _get_bot() -> Bot | None:
 
 def _chat_id() -> str:
     return os.getenv("TELEGRAM_CHAT_ID", "")
+
+
+async def _db_find_wallet_by_address(address: str):
+    """Return a wallet row by exact address, or None."""
+    from db import wallet_table, get_session
+    async with get_session() as session:
+        result = await session.execute(
+            select(wallet_table).where(wallet_table.c.address == address)
+        )
+        return result.fetchone()
+
+
+async def _db_find_wallet_by_address_prefix(prefix: str):
+    """Return a wallet row whose address starts with prefix (case-insensitive), or None."""
+    from sqlalchemy import func
+    from db import wallet_table, get_session
+    async with get_session() as session:
+        result = await session.execute(
+            select(wallet_table).where(
+                func.lower(wallet_table.c.address).like(prefix.lower() + "%")
+            )
+        )
+        return result.fetchone()
 
 
 def _security_emoji(score: float | None) -> str:
@@ -495,7 +520,10 @@ async def _handle_watch(bot: Bot, update: Update) -> None:
         )
         return
 
-    db_wallet = await db.prisma.wallet.find_unique(where={"address": found.address})
+    import db
+    from db import wallet_table, user_watchlist_table, get_session
+
+    db_wallet = await _db_find_wallet_by_address(found.address)
     if not db_wallet:
         await bot.send_message(
             chat_id=chat_id,
@@ -505,9 +533,14 @@ async def _handle_watch(bot: Bot, update: Update) -> None:
         return
 
     try:
-        await db.prisma.userwatchlist.create(
-            data={"telegramUserId": telegram_user_id, "walletId": db_wallet.id}
-        )
+        import uuid
+        stmt = pg_insert(user_watchlist_table).values(
+            id=str(uuid.uuid4()),
+            telegram_user_id=telegram_user_id,
+            wallet_id=db_wallet.id,
+        ).on_conflict_do_nothing()
+        async with get_session() as session:
+            await session.execute(stmt)
         await bot.send_message(
             chat_id=chat_id,
             text=(
@@ -551,9 +584,7 @@ async def _handle_unwatch(bot: Bot, update: Update) -> None:
         return
 
     query = parts[1].lower()
-    db_wallet = await db.prisma.wallet.find_first(
-        where={"address": {"startswith": query}}
-    )
+    db_wallet = await _db_find_wallet_by_address_prefix(query)
     if not db_wallet:
         await bot.send_message(
             chat_id=chat_id,
@@ -562,9 +593,15 @@ async def _handle_unwatch(bot: Bot, update: Update) -> None:
         )
         return
 
-    deleted = await db.prisma.userwatchlist.delete_many(
-        where={"telegramUserId": telegram_user_id, "walletId": db_wallet.id}
-    )
+    from db import wallet_table, user_watchlist_table, get_session
+    async with get_session() as session:
+        result = await session.execute(
+            delete(user_watchlist_table).where(
+                user_watchlist_table.c.telegram_user_id == telegram_user_id,
+                user_watchlist_table.c.wallet_id == db_wallet.id,
+            )
+        )
+        deleted = result.rowcount
 
     if deleted:
         await bot.send_message(
@@ -595,13 +632,17 @@ async def _handle_my_wallets(bot: Bot, update: Update) -> None:
         )
         return
 
-    items = await db.prisma.userwatchlist.find_many(
-        where={"telegramUserId": telegram_user_id},
-        include={"wallet": True},
-        order={"addedAt": "asc"},
-    )
+    from db import wallet_table, user_watchlist_table, get_session
+    async with get_session() as session:
+        result = await session.execute(
+            select(user_watchlist_table, wallet_table)
+            .join(wallet_table, user_watchlist_table.c.wallet_id == wallet_table.c.id)
+            .where(user_watchlist_table.c.telegram_user_id == telegram_user_id)
+            .order_by(user_watchlist_table.c.added_at.asc())
+        )
+        rows = result.fetchall()
 
-    if not items:
+    if not rows:
         await bot.send_message(
             chat_id=chat_id,
             text=(
@@ -613,13 +654,13 @@ async def _handle_my_wallets(bot: Bot, update: Update) -> None:
         )
         return
 
-    lines = [f"📋 <b>Your Watchlist ({len(items)} wallet{'s' if len(items) != 1 else ''})</b>\n"]
-    for i, item in enumerate(items, start=1):
-        w = item.wallet
-        pnl_str = f"${w.totalPnl:,.0f}" if w.totalPnl >= 0 else f"-${abs(w.totalPnl):,.0f}"
+    lines = [f"📋 <b>Your Watchlist ({len(rows)} wallet{'s' if len(rows) != 1 else ''})</b>\n"]
+    for i, row in enumerate(rows, start=1):
+        pnl = row.total_pnl or 0.0
+        pnl_str = f"${pnl:,.0f}" if pnl >= 0 else f"-${abs(pnl):,.0f}"
         lines.append(
-            f"#{i} <b>{w.label}</b> — {pnl_str} | {w.winRate * 100:.0f}% win\n"
-            f"<code>{w.address[:20]}...</code>"
+            f"#{i} <b>{row.label}</b> — {pnl_str} | {(row.win_rate or 0) * 100:.0f}% win\n"
+            f"<code>{row.address[:20]}...</code>"
         )
     lines.append("\nUse <code>/unwatch [address]</code> to remove a wallet.")
 

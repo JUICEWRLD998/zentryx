@@ -13,10 +13,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import select, delete
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
 import db
+from db import (
+    wallet_table, trade_event_table, user_watchlist_table,
+    smart_money_cache_table, token_enrichment_cache_table,
+    get_session,
+)
 from models.schemas import TokenMiniReport
 from services import birdeye
 from services.ws_manager import manager as ws_manager
@@ -64,22 +73,21 @@ def _apply_defaults_for_small_tokens(report: TokenMiniReport) -> TokenMiniReport
 
 
 def _report_from_cache(token_address: str, cached, smart_money_flag: bool) -> TokenMiniReport:
-    """Build a TokenMiniReport directly from a TokenEnrichmentCache DB row."""
+    """Build a TokenMiniReport from a SQLAlchemy row (snake_case column names)."""
     report = TokenMiniReport(
         token_address=token_address,
-        security_score=cached.securityScore,
-        is_honeypot=cached.isHoneypot,
+        security_score=cached.security_score,
+        is_honeypot=cached.is_honeypot,
         smart_money_flag=smart_money_flag,
-        momentum_24h=cached.momentum24h,
-        holder_count=cached.holderCount,
-        buy_sell_ratio=cached.buySellRatio,
-        total_liquidity_usd=cached.liquidityUsd,
+        momentum_24h=cached.momentum_24h,
+        holder_count=cached.holder_count,
+        buy_sell_ratio=cached.buy_sell_ratio,
+        total_liquidity_usd=cached.liquidity_usd,
         symbol=cached.symbol,
         price=cached.price,
-        market_cap=cached.marketCap,
-        volume_24h=cached.volume24h,
+        market_cap=cached.market_cap,
+        volume_24h=cached.volume_24h,
     )
-    # Apply defaults if data was missing when cached
     return _apply_defaults_for_small_tokens(report)
 
 
@@ -105,22 +113,30 @@ async def _get_smart_money_addresses() -> set[str]:
     now = datetime.now(tz=timezone.utc)
 
     # Fast path: check for a non-expired cache row
-    cache = await db.prisma.smartmoneycache.find_first(
-        where={"expiresAt": {"gt": now}},
-        order={"cachedAt": "desc"},
-    )
-    if cache:
-        return set(cache.tokenAddresses)
+    async with get_session() as session:
+        result = await session.execute(
+            select(smart_money_cache_table)
+            .where(smart_money_cache_table.c.expires_at > now)
+            .order_by(smart_money_cache_table.c.cached_at.desc())
+            .limit(1)
+        )
+        row = result.fetchone()
+    if row:
+        return set(row.token_addresses)
 
     # Slow path (cache miss): fetch from Birdeye under a lock to prevent thundering herd
     async with _smart_money_lock:
-        # Re-check after acquiring lock (another coroutine may have refreshed already)
-        cache = await db.prisma.smartmoneycache.find_first(
-            where={"expiresAt": {"gt": now}},
-            order={"cachedAt": "desc"},
-        )
-        if cache:
-            return set(cache.tokenAddresses)
+        # Re-check after acquiring lock
+        async with get_session() as session:
+            result = await session.execute(
+                select(smart_money_cache_table)
+                .where(smart_money_cache_table.c.expires_at > now)
+                .order_by(smart_money_cache_table.c.cached_at.desc())
+                .limit(1)
+            )
+            row = result.fetchone()
+        if row:
+            return set(row.token_addresses)
 
         try:
             raw = await birdeye.get_smart_money_tokens(limit=50)
@@ -133,9 +149,15 @@ async def _get_smart_money_addresses() -> set[str]:
         if addresses:
             expires_at = now + timedelta(hours=1)
             try:
-                await db.prisma.smartmoneycache.create(
-                    data={"tokenAddresses": addresses, "expiresAt": expires_at}
-                )
+                async with get_session() as session:
+                    await session.execute(
+                        pg_insert(smart_money_cache_table).values(
+                            id=str(uuid.uuid4()),
+                            token_addresses=addresses,
+                            cached_at=now,
+                            expires_at=expires_at,
+                        )
+                    )
                 logger.info(
                     "Smart money cache refreshed — %d tokens, expires in 1 hour.",
                     len(addresses),
@@ -172,9 +194,16 @@ async def build_mini_report(token_address: str) -> TokenMiniReport:
     # ── Fast path: DB cache hit ──────────────────────────────────────────
     if db.is_available():
         now = datetime.now(tz=timezone.utc)
-        cached = await db.prisma.tokenenrichmentcache.find_first(
-            where={"tokenAddress": token_address, "expiresAt": {"gt": now}},
-        )
+        async with get_session() as session:
+            result = await session.execute(
+                select(token_enrichment_cache_table)
+                .where(
+                    token_enrichment_cache_table.c.token_address == token_address,
+                    token_enrichment_cache_table.c.expires_at > now,
+                )
+                .limit(1)
+            )
+            cached = result.fetchone()
         if cached:
             logger.debug("Enrichment cache hit for %s", token_address[:8])
             return _report_from_cache(token_address, cached, smart_money_flag)
@@ -185,9 +214,16 @@ async def build_mini_report(token_address: str) -> TokenMiniReport:
         # Re-check after acquiring lock — another coroutine may have fetched already
         if db.is_available():
             now = datetime.now(tz=timezone.utc)
-            cached = await db.prisma.tokenenrichmentcache.find_first(
-                where={"tokenAddress": token_address, "expiresAt": {"gt": now}},
-            )
+            async with get_session() as session:
+                result = await session.execute(
+                    select(token_enrichment_cache_table)
+                    .where(
+                        token_enrichment_cache_table.c.token_address == token_address,
+                        token_enrichment_cache_table.c.expires_at > now,
+                    )
+                    .limit(1)
+                )
+                cached = result.fetchone()
             if cached:
                 return _report_from_cache(token_address, cached, smart_money_flag)
 
@@ -272,39 +308,45 @@ async def build_mini_report(token_address: str) -> TokenMiniReport:
         # ── Persist to cache ─────────────────────────────────────────────
         if db.is_available():
             expires_at = datetime.now(tz=timezone.utc) + timedelta(hours=6)
+            now_ts = datetime.now(tz=timezone.utc)
             try:
-                await db.prisma.tokenenrichmentcache.upsert(
-                    where={"tokenAddress": token_address},
-                    data={
-                        "create": {
-                            "tokenAddress": token_address,
-                            "expiresAt": expires_at,
-                            "securityScore": report.security_score,
-                            "isHoneypot": report.is_honeypot,
-                            "momentum24h": report.momentum_24h,
-                            "holderCount": report.holder_count,
-                            "buySellRatio": report.buy_sell_ratio,
-                            "liquidityUsd": report.total_liquidity_usd,
+                stmt = (
+                    pg_insert(token_enrichment_cache_table)
+                    .values(
+                        id=str(uuid.uuid4()),
+                        token_address=token_address,
+                        cached_at=now_ts,
+                        expires_at=expires_at,
+                        security_score=report.security_score,
+                        is_honeypot=report.is_honeypot,
+                        momentum_24h=report.momentum_24h,
+                        holder_count=report.holder_count,
+                        buy_sell_ratio=report.buy_sell_ratio,
+                        liquidity_usd=report.total_liquidity_usd,
+                        symbol=report.symbol,
+                        price=report.price,
+                        market_cap=report.market_cap,
+                        volume_24h=report.volume_24h,
+                    )
+                    .on_conflict_do_update(
+                        index_elements=["token_address"],
+                        set_={
+                            "expires_at": expires_at,
+                            "security_score": report.security_score,
+                            "is_honeypot": report.is_honeypot,
+                            "momentum_24h": report.momentum_24h,
+                            "holder_count": report.holder_count,
+                            "buy_sell_ratio": report.buy_sell_ratio,
+                            "liquidity_usd": report.total_liquidity_usd,
                             "symbol": report.symbol,
                             "price": report.price,
-                            "marketCap": report.market_cap,
-                            "volume24h": report.volume_24h,
+                            "market_cap": report.market_cap,
+                            "volume_24h": report.volume_24h,
                         },
-                        "update": {
-                            "expiresAt": expires_at,
-                            "securityScore": report.security_score,
-                            "isHoneypot": report.is_honeypot,
-                            "momentum24h": report.momentum_24h,
-                            "holderCount": report.holder_count,
-                            "buySellRatio": report.buy_sell_ratio,
-                            "liquidityUsd": report.total_liquidity_usd,
-                            "symbol": report.symbol,
-                            "price": report.price,
-                            "marketCap": report.market_cap,
-                            "volume24h": report.volume_24h,
-                        },
-                    },
+                    )
                 )
+                async with get_session() as session:
+                    await session.execute(stmt)
                 logger.info(
                     "Enrichment cache stored for %s (%s) — expires in 6 hours.",
                     token_address[:8], report.symbol or "?",
@@ -348,40 +390,43 @@ async def _persist_trade(
     wallet_id: str | None = None
     if wallet_address:
         try:
-            db_wallet = await db.prisma.wallet.find_unique(
-                where={"address": wallet_address}
-            )
-            if db_wallet:
-                wallet_id = db_wallet.id
+            async with get_session() as session:
+                result = await session.execute(
+                    select(wallet_table).where(wallet_table.c.address == wallet_address)
+                )
+                row = result.fetchone()
+            if row:
+                wallet_id = row.id
         except Exception as exc:
             logger.debug("Wallet FK lookup failed for %s: %s", wallet_address[:8], exc)
 
     try:
-        await db.prisma.tradeevent.upsert(
-            where={"signature": signature},
-            data={
-                "create": {
-                    "signature": signature,
-                    "walletId": wallet_id,
-                    "walletLabel": wallet_label,
-                    "tokenAddress": token_address,
-                    "tokenSymbol": token_symbol,
-                    "side": side_str,
-                    "usdValue": usd_value,
-                    "timestamp": ts,
-                    "securityScore": report.security_score,
-                    "isHoneypot": report.is_honeypot,
-                    "smartMoneyFlag": report.smart_money_flag,
-                    "momentum24h": report.momentum_24h,
-                    "holderCount": report.holder_count,
-                    "buySellRatio": report.buy_sell_ratio,
-                    "liquidityUsd": report.total_liquidity_usd,
-                    "alertSent": False,
-                },
-                # On conflict (same signature), don't overwrite — trade is already stored
-                "update": {},
-            },
+        stmt = (
+            pg_insert(trade_event_table)
+            .values(
+                id=str(uuid.uuid4()),
+                signature=signature,
+                wallet_id=wallet_id,
+                wallet_label=wallet_label,
+                token_address=token_address,
+                token_symbol=token_symbol,
+                side=side_str,
+                usd_value=usd_value,
+                timestamp=ts,
+                security_score=report.security_score,
+                is_honeypot=report.is_honeypot,
+                smart_money_flag=report.smart_money_flag,
+                momentum_24h=report.momentum_24h,
+                holder_count=report.holder_count,
+                buy_sell_ratio=report.buy_sell_ratio,
+                liquidity_usd=report.total_liquidity_usd,
+                alert_sent=False,
+                created_at=datetime.now(tz=timezone.utc),
+            )
+            .on_conflict_do_nothing(index_elements=["signature"])
         )
+        async with get_session() as session:
+            await session.execute(stmt)
     except Exception as exc:
         logger.warning("Trade persistence failed for %s: %s", signature[:16], exc)
 
@@ -406,9 +451,12 @@ async def _send_watchlist_alerts(
     from services.telegram import send_personal_trade_alert  # avoid circular import
 
     try:
-        watchers = await db.prisma.userwatchlist.find_many(
-            where={"walletId": wallet_id}
-        )
+        async with get_session() as session:
+            result = await session.execute(
+                select(user_watchlist_table)
+                .where(user_watchlist_table.c.wallet_id == wallet_id)
+            )
+            watchers = result.fetchall()
     except Exception as exc:
         logger.debug("Watchlist query failed: %s", exc)
         return
@@ -416,7 +464,7 @@ async def _send_watchlist_alerts(
     for watcher in watchers:
         asyncio.create_task(
             send_personal_trade_alert(
-                telegram_user_id=int(watcher.telegramUserId),
+                telegram_user_id=int(watcher.telegram_user_id),
                 wallet_label=wallet_label,
                 wallet_address=wallet_address,
                 token_symbol=token_symbol,
@@ -496,9 +544,11 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
         # Resolve wallet_id for watchlist alerts
         if db.is_available() and wallet_address:
             try:
-                db_wallet = await db.prisma.wallet.find_unique(
-                    where={"address": wallet_address}
-                )
+                async with get_session() as session:
+                    result = await session.execute(
+                        select(wallet_table).where(wallet_table.c.address == wallet_address)
+                    )
+                    db_wallet = result.fetchone()
                 if db_wallet:
                     wallet_id = db_wallet.id
             except Exception:
