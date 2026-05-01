@@ -93,13 +93,13 @@ async def _poll_token(token: dict, tracked_wallet_addrs: set[str], on_event) -> 
             continue
 
         # Skip old transactions
-        ts = tx.get("blockUnixTime") or tx.get("timestamp") or 0
+        ts = tx.get("block_unix_time") or tx.get("blockUnixTime") or tx.get("timestamp") or 0
         if ts < cutoff:
             skipped_stale += 1
             continue
 
         # Filter by minimum USD value
-        value_usd = float(tx.get("volumeUSD") or tx.get("value") or tx.get("amount") or 0)
+        value_usd = float(tx.get("volume_usd") or tx.get("volumeUSD") or tx.get("volume") or tx.get("value") or tx.get("amount") or 0)
         if value_usd < MIN_VALUE_USD:
             skipped_usd += 1
             continue
