@@ -3,10 +3,13 @@ Zentryx FastAPI application entry point.
 
 Startup sequence (via lifespan):
   1. Load .env
-  2. Start APScheduler (weekly wallet discovery)
-  3. Run initial wallet discovery so the app has data immediately
-  4. Start Birdeye WebSocket listener in background task
-  5. Send Telegram startup notification
+  2. Connect to PostgreSQL (graceful no-op if DATABASE_URL not set)
+  3. Start APScheduler (weekly wallet discovery + 6-hourly snapshots)
+  4. Run initial wallet discovery so the app has data immediately
+  5. Start Solana RPC WebSocket listener (real-time whale trade detection)
+  6. Start REST polling fallback (secondary, activates if RPC WS fails)
+  7. Start Telegram bot command loop
+  8. Send Telegram startup notification
 """
 from __future__ import annotations
 
@@ -27,7 +30,7 @@ import db
 from routers.wallets import router as wallets_router
 from routers.ws import router as ws_router
 from scheduler import scheduler
-from services.birdeye_ws import run_birdeye_ws
+from services.solana_rpc_ws import run_solana_rpc_ws
 from services.enrichment import process_trade_event
 from services.polling_worker import run_polling_worker
 from services.telegram import run_bot_command_loop, send_startup_message
@@ -58,9 +61,9 @@ async def lifespan(app: FastAPI):
     logger.info("Scheduler started. Running initial wallet discovery...")
     await discover_wallets()
 
-    # Start Birdeye WebSocket listener as a background task (gracefully degrades on 403)
-    _ws_task = asyncio.create_task(run_birdeye_ws(process_trade_event))
-    logger.info("Birdeye WebSocket listener started.")
+    # Start Solana RPC WebSocket listener — free-tier real-time trade detection
+    _ws_task = asyncio.create_task(run_solana_rpc_ws(process_trade_event))
+    logger.info("Solana RPC WebSocket listener started.")
 
     # Start REST polling fallback — feeds live data when WS is unavailable
     _poll_task = asyncio.create_task(run_polling_worker(process_trade_event))
@@ -89,7 +92,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Zentryx API",
-    description="Copy-Trading Intelligence Terminal — Solana whale tracking via Birdeye.",
+    description="Copy-Trading Intelligence Terminal — Solana whale tracking via Solana RPC.",
     version="0.2.0",
     lifespan=lifespan,
 )
