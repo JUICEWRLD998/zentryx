@@ -20,10 +20,10 @@ from services import birdeye
 
 logger = logging.getLogger(__name__)
 
-POLL_INTERVAL_SECS = 1200        # how often to poll each token (20 minutes, down from 5)
-MIN_VALUE_USD = 2_000            # minimum trade size to emit
+POLL_INTERVAL_SECS = 60          # how often to poll each token (1 minute)
+MIN_VALUE_USD = 50               # minimum trade size to emit
 MAX_SEEN: int = 5_000            # cap on dedup cache
-TOKEN_POLL_DELAY = 5.0           # seconds between consecutive token polls (sequential, not parallel)
+TOKEN_POLL_DELAY = 2.0           # seconds between consecutive token polls (sequential, not parallel)
 
 # Popular Solana tokens to monitor (mint addresses)
 MONITORED_TOKENS: list[dict] = [
@@ -60,7 +60,7 @@ async def _poll_token(token: dict, tracked_wallet_addrs: set[str], on_event) -> 
     txs: list[dict] = data_block.get("items") or data_block.get("list") or []
 
     now = int(time.time())
-    cutoff = now - POLL_INTERVAL_SECS * 3  # only process recent txs
+    cutoff = now - 600  # only process txs from the last 10 minutes
 
     total = len(txs)
     skipped_dup = skipped_stale = skipped_usd = emitted = 0
