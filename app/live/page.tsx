@@ -76,6 +76,7 @@ function TradeCard({
     : "—";
   const symbol = event.symbol || event.token_address.slice(0, 8);
   const secScore = event.mini_report?.security_score;
+  const momentum = event.mini_report?.momentum_24h;
   const secColor =
     secScore == null
       ? "text-muted-foreground"
@@ -84,6 +85,8 @@ function TradeCard({
       : secScore >= 40
       ? "text-yellow-400"
       : "text-sell";
+  const momColor =
+    momentum == null ? "text-muted-foreground" : momentum >= 0 ? "text-buy" : "text-sell";
 
   return (
     <motion.div
@@ -114,6 +117,11 @@ function TradeCard({
         <div className="flex items-center gap-2.5 shrink-0">
           {secScore != null && (
             <span className={`text-xs ${secColor}`}>SEC {secScore.toFixed(0)}</span>
+          )}
+          {momentum != null && (
+            <span className={`text-xs ${momColor}`}>
+              {momentum >= 0 ? "▲" : "▼"}{Math.abs(momentum).toFixed(1)}%
+            </span>
           )}
           {event.mini_report?.smart_money_flag && (
             <span className="text-xs text-cyan">◆ Smart $</span>

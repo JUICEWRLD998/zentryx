@@ -511,6 +511,8 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
         wallet_label = tracked_wallets[wallet_address].label
     elif event_type == "LARGE_TRADE_TXS":
         wallet_label = "Whale Alert"
+    elif data.get("wallet_label"):          # label already resolved by RPC/polling layer
+        wallet_label = data["wallet_label"]
 
     if wallet_label is None:
         return
@@ -597,12 +599,3 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
             report=mini_report,
         )
     )
-
-
-async def _safe(coro) -> dict[str, Any]:
-    """Run a coroutine and return its result dict, or {} on any error."""
-    try:
-        return await coro
-    except Exception as exc:
-        logger.debug("Enrichment sub-call failed: %s", exc)
-        return {}
