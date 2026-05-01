@@ -7,13 +7,4 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.0"
-
-  - type: worker
-    name: zentryx-worker
-    runtime: python
-    buildCommand: cd backend && pip install -r requirements.txt
-    startCommand: cd backend && python worker.py
-    envVars:
-      - key: PYTHON_VERSION
-        value: "3.11.0"
         
