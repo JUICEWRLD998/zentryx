@@ -70,7 +70,7 @@ Zentryx automatically discovers the top-performing wallets on Solana, tracks the
 
 | Service | Role |
 |---|---|
-| PostgreSQL (Prisma Cloud) | Persistent storage — wallets, snapshots, trades, watchlists, cache |
+| Supabase (PostgreSQL) | Persistent storage — wallets, snapshots, trades, watchlists, cache |
 | Solana RPC (mainnet-beta) | Real-time whale trade detection via `accountSubscribe` WebSocket |
 | Birdeye API (free tier) | Token intelligence — security scoring, honeypot flags, market metrics |
 | Telegram Bot API | Command handling and real-time DM alerts |
@@ -371,7 +371,7 @@ A **5-second per-chat cooldown** prevents spam. `/start` and `/help` are exempt.
 
 - **Node.js** 18+ with npm
 - **Python** 3.13+
-- **PostgreSQL** database (Prisma Cloud, Supabase, Railway, or local)
+- **Supabase** (PostgreSQL database) or self-hosted PostgreSQL
 - **Birdeye API key** — free tier at [birdeye.so](https://birdeye.so)
 - **Telegram bot token** — create via [@BotFather](https://t.me/BotFather)
 
@@ -423,6 +423,8 @@ Create `backend/.env`:
 
 ```env
 DATABASE_URL=postgresql://user:password@host:5432/dbname
+# For Supabase, use your project connection string from Supabase dashboard
+# Example: postgresql://postgres:[PASSWORD]@[HOST]:5432/postgres
 BIRDEYE_API_KEY=your_birdeye_key
 TELEGRAM_BOT_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_telegram_chat_id
