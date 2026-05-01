@@ -1,18 +1,12 @@
 """
 Zentryx FastAPI application entry point.
 
-Startup sequence (via lifespan):
-  1. Load .env
-  2. Connect to PostgreSQL (graceful no-op if DATABASE_URL not set)
-  3. Start APScheduler (weekly wallet discovery + 6-hourly snapshots)
-  4. Run initial wallet discovery so the app has data immediately
-  5. Start Solana RPC WebSocket listener (real-time whale trade detection)
-  6. Start Telegram bot command loop
-  7. Send Telegram startup notification
+The web service only handles HTTP/WebSocket API traffic.
+All background monitoring (Solana RPC listener, Telegram bot, Scheduler)
+runs in the dedicated background worker (worker.py).
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -28,11 +22,6 @@ load_dotenv(Path(__file__).parent / ".env")  # Load backend/.env regardless of C
 import db
 from routers.wallets import router as wallets_router
 from routers.ws import router as ws_router
-from scheduler import scheduler
-from services.solana_rpc_ws import run_solana_rpc_ws
-from services.enrichment import process_trade_event
-from services.telegram import run_bot_command_loop, send_startup_message
-from services.wallet_discovery import discover_wallets
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,44 +30,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-_ws_task: asyncio.Task | None = None
-_bot_task: asyncio.Task | None = None
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _ws_task
     # ── Startup ────────────────────────────────────────────────────────────
-    logger.info("Zentryx backend starting up...")
-
-    # Connect to PostgreSQL (gracefully skips if DATABASE_URL not set)
+    logger.info("Zentryx API starting up...")
     await db.connect()
-
-    scheduler.start()
-    logger.info("Scheduler started. Running initial wallet discovery...")
-    await discover_wallets()
-
-    # Start Solana RPC WebSocket listener — free-tier real-time trade detection
-    _ws_task = asyncio.create_task(run_solana_rpc_ws(process_trade_event))
-    logger.info("Solana RPC WebSocket listener started.")
-
-    # Start Telegram bot command loop — listens for /start, /wallets, /help
-    _bot_task = asyncio.create_task(run_bot_command_loop())
-    logger.info("Telegram bot command loop started.")
-
-    # Telegram startup ping
-    await send_startup_message()
-
     logger.info("Startup complete.")
     yield
     # ── Shutdown ───────────────────────────────────────────────────────────
-    if _ws_task and not _ws_task.done():
-        _ws_task.cancel()
-    if _bot_task and not _bot_task.done():
-        _bot_task.cancel()
-    scheduler.shutdown(wait=False)
     await db.disconnect()
-    logger.info("Zentryx backend shut down.")
+    logger.info("Zentryx API shut down.")
 
 
 app = FastAPI(
