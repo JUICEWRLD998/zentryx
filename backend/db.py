@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import ssl
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -145,8 +146,23 @@ async def connect() -> None:
     elif database_url.startswith("postgresql://"):
         database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
+    # asyncpg does not accept sslmode in the URL — strip it and pass ssl via connect_args
+    needs_ssl = "sslmode=require" in database_url or "sslmode=verify-full" in database_url
+    for param in ("sslmode=require", "sslmode=verify-full", "sslmode=verify-ca", "sslmode=prefer"):
+        database_url = database_url.replace(f"&{param}", "").replace(f"?{param}", "")
+    database_url = database_url.rstrip("?&")
+
+    connect_args: dict = {}
+    if needs_ssl:
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+        connect_args["ssl"] = ssl_ctx
+
     try:
-        _engine = create_async_engine(database_url, echo=False, pool_pre_ping=True)
+        _engine = create_async_engine(
+            database_url, echo=False, pool_pre_ping=True, connect_args=connect_args
+        )
         _session_factory = async_sessionmaker(
             _engine, class_=AsyncSession, expire_on_commit=False
         )
