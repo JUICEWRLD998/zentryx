@@ -509,10 +509,10 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
     wallet_label: str | None = None
     if wallet_address and wallet_address in tracked_wallets:
         wallet_label = tracked_wallets[wallet_address].label
-    elif event_type == "LARGE_TRADE_TXS":
-        wallet_label = "Whale Alert"
     elif data.get("wallet_label"):          # label already resolved by RPC/polling layer
         wallet_label = data["wallet_label"]
+    elif event_type == "LARGE_TRADE_TXS":
+        wallet_label = "Whale Alert"        # fallback when no label was pre-resolved
 
     if wallet_label is None:
         return

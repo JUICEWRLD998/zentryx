@@ -108,20 +108,25 @@ async def _poll_token(token: dict, tracked_wallet_addrs: set[str], on_event) -> 
         _prune_seen()
 
         owner = tx.get("owner") or tx.get("wallet") or ""
-        wallet_label = None
-        if owner and owner in tracked_wallet_addrs:
+        is_tracked = bool(owner and owner in tracked_wallet_addrs)
+        wallet_label: str
+        if is_tracked:
             from services.wallet_discovery import tracked_wallets
             tw = tracked_wallets.get(owner)
-            wallet_label = tw.label if tw else f"{owner[:6]}…"
+            wallet_label = tw.label if tw else f"{owner[:8]}…"
+        elif owner:
+            wallet_label = f"{owner[:8]}…"   # short address for anonymous large trades
+        else:
+            wallet_label = "Unknown Wallet"
 
         side = (tx.get("side") or tx.get("type") or "unknown").upper()
 
         synthetic_event: dict = {
-            "type": "LARGE_TRADE_TXS" if not wallet_label else "WALLET_TXS",
+            "type": "WALLET_TXS" if is_tracked else "LARGE_TRADE_TXS",
             "data": {
                 "txHash": tx_hash,
                 "owner": owner,
-                "wallet_label": wallet_label or "Unknown",
+                "wallet_label": wallet_label,
                 "tokenAddress": token_address,
                 "tokenSymbol": symbol,
                 "side": side,
