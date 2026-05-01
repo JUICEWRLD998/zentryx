@@ -534,10 +534,12 @@ async def _handle_watch(bot: Bot, update: Update) -> None:
 
     try:
         import uuid
+        from datetime import datetime, timezone
         stmt = pg_insert(user_watchlist_table).values(
             id=str(uuid.uuid4()),
             telegram_user_id=telegram_user_id,
             wallet_id=db_wallet.id,
+            added_at=datetime.now(tz=timezone.utc),
         ).on_conflict_do_nothing()
         async with get_session() as session:
             await session.execute(stmt)
