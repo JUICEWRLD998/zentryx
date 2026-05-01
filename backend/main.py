@@ -7,9 +7,8 @@ Startup sequence (via lifespan):
   3. Start APScheduler (weekly wallet discovery + 6-hourly snapshots)
   4. Run initial wallet discovery so the app has data immediately
   5. Start Solana RPC WebSocket listener (real-time whale trade detection)
-  6. Start REST polling fallback (secondary, activates if RPC WS fails)
-  7. Start Telegram bot command loop
-  8. Send Telegram startup notification
+  6. Start Telegram bot command loop
+  7. Send Telegram startup notification
 """
 from __future__ import annotations
 
@@ -32,7 +31,6 @@ from routers.ws import router as ws_router
 from scheduler import scheduler
 from services.solana_rpc_ws import run_solana_rpc_ws
 from services.enrichment import process_trade_event
-from services.polling_worker import run_polling_worker
 from services.telegram import run_bot_command_loop, send_startup_message
 from services.wallet_discovery import discover_wallets
 
@@ -44,13 +42,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 _ws_task: asyncio.Task | None = None
-_poll_task: asyncio.Task | None = None
 _bot_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _ws_task, _poll_task
+    global _ws_task
     # ── Startup ────────────────────────────────────────────────────────────
     logger.info("Zentryx backend starting up...")
 
@@ -65,10 +62,6 @@ async def lifespan(app: FastAPI):
     _ws_task = asyncio.create_task(run_solana_rpc_ws(process_trade_event))
     logger.info("Solana RPC WebSocket listener started.")
 
-    # Start REST polling fallback — feeds live data when WS is unavailable
-    _poll_task = asyncio.create_task(run_polling_worker(process_trade_event))
-    logger.info("REST polling fallback started.")
-
     # Start Telegram bot command loop — listens for /start, /wallets, /help
     _bot_task = asyncio.create_task(run_bot_command_loop())
     logger.info("Telegram bot command loop started.")
@@ -81,8 +74,6 @@ async def lifespan(app: FastAPI):
     # ── Shutdown ───────────────────────────────────────────────────────────
     if _ws_task and not _ws_task.done():
         _ws_task.cancel()
-    if _poll_task and not _poll_task.done():
-        _poll_task.cancel()
     if _bot_task and not _bot_task.done():
         _bot_task.cancel()
     scheduler.shutdown(wait=False)
