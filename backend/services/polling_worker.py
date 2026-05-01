@@ -63,7 +63,7 @@ async def _poll_token(token: dict, tracked_wallet_addrs: set[str], on_event) -> 
     cutoff = now - 600  # only process txs from the last 10 minutes
 
     total = len(txs)
-    skipped_dup = skipped_stale = skipped_usd = emitted = 0
+    skipped_dup = skipped_stale = skipped_usd = skipped_untracked = emitted = 0
 
     # Log raw keys of first tx once per token to diagnose field name mismatches
     if txs:
@@ -104,25 +104,23 @@ async def _poll_token(token: dict, tracked_wallet_addrs: set[str], on_event) -> 
             skipped_usd += 1
             continue
 
+        # Only emit trades from tracked wallets
+        owner = tx.get("owner") or tx.get("wallet") or ""
+        if not owner or owner not in tracked_wallet_addrs:
+            skipped_untracked += 1
+            continue
+
         _seen_tx_ids.add(tx_hash)
         _prune_seen()
 
-        owner = tx.get("owner") or tx.get("wallet") or ""
-        is_tracked = bool(owner and owner in tracked_wallet_addrs)
-        wallet_label: str
-        if is_tracked:
-            from services.wallet_discovery import tracked_wallets
-            tw = tracked_wallets.get(owner)
-            wallet_label = tw.label if tw else f"{owner[:8]}…"
-        elif owner:
-            wallet_label = f"{owner[:8]}…"   # short address for anonymous large trades
-        else:
-            wallet_label = "Unknown Wallet"
+        from services.wallet_discovery import tracked_wallets
+        tw = tracked_wallets.get(owner)
+        wallet_label: str = tw.label if tw else f"{owner[:8]}…"
 
         side = (tx.get("side") or tx.get("type") or "unknown").upper()
 
         synthetic_event: dict = {
-            "type": "WALLET_TXS" if is_tracked else "LARGE_TRADE_TXS",
+            "type": "WALLET_TXS",
             "data": {
                 "txHash": tx_hash,
                 "owner": owner,
@@ -141,8 +139,8 @@ async def _poll_token(token: dict, tracked_wallet_addrs: set[str], on_event) -> 
             logger.debug("Enrichment task error: %s", exc)
 
     logger.info(
-        "[%s] polled %d txs → emitted=%d dup=%d stale=%d below_usd=%d (min=$%s)",
-        symbol, total, emitted, skipped_dup, skipped_stale, skipped_usd, MIN_VALUE_USD,
+        "[%s] polled %d txs → emitted=%d dup=%d stale=%d below_usd=%d untracked=%d",
+        symbol, total, emitted, skipped_dup, skipped_stale, skipped_usd, skipped_untracked,
     )
 
 

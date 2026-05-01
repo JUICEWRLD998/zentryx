@@ -50,22 +50,22 @@ async def _get_enrichment_lock(token_address: str) -> asyncio.Lock:
 
 def _apply_defaults_for_small_tokens(report: TokenMiniReport) -> TokenMiniReport:
     """
-    For small/unpopular tokens where Birdeye has no data, provide sensible defaults.
-    This ensures consistent UX even for newly-launched or small-cap tokens.
-    
-    Defaults are conservative but reasonable:
-    - Security: 70/100 (risky but not extreme — user should still be careful)
-    - Honeypot: False (no evidence of it)
-    - Momentum: 0% (neutral, no trending data)
-    - Buy/sell: 0.5 (perfectly balanced — no data to suggest otherwise)
+    For tokens where Birdeye has no data, apply these defaults:
+    - Security: 50/100
+    - Honeypot: False
+    - Smart Money: True
+    - Momentum: 70%
+    - Buy/sell: 0.5
     """
     # Only fill gaps — respect actual Birdeye data if present
     if report.security_score is None:
-        report.security_score = 70.0
+        report.security_score = 50.0
     if report.is_honeypot is None:
         report.is_honeypot = False
+    if not report.smart_money_flag:
+        report.smart_money_flag = True
     if report.momentum_24h is None:
-        report.momentum_24h = 0.0
+        report.momentum_24h = 0.7
     if report.buy_sell_ratio is None:
         report.buy_sell_ratio = 0.5
     
