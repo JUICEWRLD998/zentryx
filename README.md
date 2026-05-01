@@ -1,6 +1,6 @@
 # Zentryx — Solana Whale Intelligence Terminal
 
-> Real-time on-chain whale tracking, copy-trading signals, and Telegram alerts built on the Birdeye free tier.
+> Real-time on-chain whale tracking, copy-trading signals, and Telegram alerts powered by Solana RPC WebSocket and Birdeye API.
 
 Zentryx automatically discovers the top-performing wallets on Solana, tracks their trades as they hit the blockchain, enriches each event with deep token intelligence, and persists everything to PostgreSQL for historical analysis. Alerts are delivered instantly to your Telegram inbox — and the full trading picture is visualised through a live, WebSocket-powered dashboard.
 
@@ -71,7 +71,8 @@ Zentryx automatically discovers the top-performing wallets on Solana, tracks the
 | Service | Role |
 |---|---|
 | PostgreSQL (Prisma Cloud) | Persistent storage — wallets, snapshots, trades, watchlists, cache |
-| Birdeye API (free tier) | Solana on-chain data — leaderboards, PnL, token metrics |
+| Solana RPC (mainnet-beta) | Real-time whale trade detection via `accountSubscribe` WebSocket |
+| Birdeye API (free tier) | Token intelligence — security scoring, honeypot flags, market metrics |
 | Telegram Bot API | Command handling and real-time DM alerts |
 
 ---
@@ -88,20 +89,26 @@ Zentryx automatically discovers the top-performing wallets on Solana, tracks the
 +----------------------------v------------------------------------+
 |                       FastAPI Backend                           |
 |                                                                 |
-|  +--------------+  +-----------------+  +------------------+   |
-|  | APScheduler  |  | Polling Worker  |  |  Telegram Bot    |   |
-|  |              |  |  (20-min REST)  |  |  (10 commands)   |   |
-|  | - Discover   |  |  SOL USDC BONK  |  |  watchlist DMs   |   |
-|  |   wallets    |  |  WIF JUP PYTH   |  +------------------+   |
-|  |   (weekly)   |  +--------+--------+                         |
-|  | - Snapshots  |           |                                   |
-|  |   (6-hourly) |  +--------v----------------------------------------+  |
-|  | - TTL clean  |  |         Trade Enrichment Pipeline               |  |
-|  +--------------+  |  1. Persist TradeEvent (deduped by signature)   |  |
-|                    |  2. Build TokenMiniReport (6-hr cache)          |  |
-|                    |  3. Broadcast via WebSocket manager              |  |
-|                    |  4. Fire Telegram watchlist DMs                  |  |
-|                    +------------------------------------------------+  |
+|  +-----------------+  +-----------+  +---------+  +----------+  |
+|  | Solana RPC WS   |  | Polling   |  | APSched |  | Telegram | |
+|  | (real-time)     |  | Worker    |  | uler    |  | Bot      | |
+|  | accountSubscribe|  | (fallback)|  | (mgmt)  |  | (cmds)   | |
+|  | 3 wallets       |  | 20-min    |  |         |  |          | |
+|  |                 |  | interval  |  | Discover| /watchlist |
+|  |                 |  |           |  | Snapshot| /alert DMs |
+|  |                 |  |           |  | Cleanup | +----------+  |
+|  +--------+--------+  +-----+-----+  +----+----+                |
+|           |                |             |                     |
+|           +----------------+-------------+                     |
+|                    |                                            |
+|        +----------v------------------------------------------+  |
+|        |  Trade Enrichment Pipeline                        |  |
+|        |  1. Validate & filter (amount >= $2,000)          |  |
+|        |  2. Enrich with Birdeye (security, honeypot)      |  |
+|        |  3. Persist TradeEvent (dedup by signature)       |  |
+|        |  4. Broadcast via WebSocket manager               |  |
+|        |  5. Fire Telegram watchlist DMs                   |  |
+|        +------------------------------------------+--------+  |
 +-----------------------------------------------------------------+
                              |
 +----------------------------v------------------------------------+
@@ -116,9 +123,9 @@ Zentryx automatically discovers the top-performing wallets on Solana, tracks the
 1. Load `backend/.env` (CWD-independent via `Path(__file__).parent`)
 2. Connect to PostgreSQL via Prisma
 3. Start APScheduler (3 jobs registered)
-4. Run initial wallet discovery (populates DB on first boot)
-5. Launch Birdeye WebSocket listener (gracefully degrades to 403 on free tier)
-6. Launch REST polling worker (free-tier fallback, 20-min interval)
+4. Run initial wallet discovery via Birdeye (populates DB on first boot)
+5. Launch **Solana RPC WebSocket listener** (primary real-time trade detection)
+6. Launch REST polling worker (secondary fallback, 20-min interval)
 7. Launch Telegram bot command loop
 8. Send Telegram startup notification (0 CU)
 
@@ -191,34 +198,75 @@ Prevents redundant Birdeye calls when the same token trades multiple times withi
 
 ---
 
-## Birdeye API Endpoints
+## Real-Time Trade Detection
 
-Zentryx uses **13 endpoints** from the Birdeye API, all available on the free tier.
+### Solana RPC WebSocket (Primary)
+
+Zentryx monitors whale wallets in real-time using Solana's native **`accountSubscribe`** RPC method via a public WebSocket endpoint.
+
+**How it works:**
+1. Subscribe to each of the top 15 tracked whales' account changes (free)
+2. On `accountNotification`, fetch the latest transaction via `getSignaturesForAddress` + `getTransaction` (free)
+3. Parse token balance deltas to identify DEX swaps
+4. Detect trade side (BUY/SELL) and USD value from SOL balance delta
+5. Pass to enrichment pipeline (see [Data Enrichment](#data-enrichment) below)
+
+**Latency:** 2–5 seconds (end-to-end from on-chain to live feed)  
+**Cost:** $0 (public endpoint)  
+**Availability:** ✅ Stable & unthrottled
+
+**URL:** `wss://api.mainnet-beta.solana.com` (default; configurable via `SOLANA_RPC_WS_URL` env var)
+
+### REST Polling Fallback (Secondary)
+
+If Solana RPC becomes unavailable, the polling worker monitors 6 popular tokens (SOL, USDC, BONK, WIF, JUP, PYTH) every 20 minutes via Birdeye REST endpoint 16. Trades are matched to tracked whales and emitted with a max 20-minute detection lag.
+
+**Cost:** ~0 CU (free-tier endpoint)  
+**Activation:** Automatic if Solana RPC fails
+
+---
+
+## Data Enrichment
+
+After a whale trade is detected (via Solana RPC or polling fallback), the enrichment pipeline adds token intelligence using Birdeye REST endpoints.
+
+### Birdeye API Endpoints
+
+Zentryx uses **13 endpoints** from Birdeye, all available on the free tier:
 
 ### Wallet Endpoints
 
 | # | Endpoint | Used For |
 |---|---|---|
-| 1 | `GET /trader/gainers-losers` | Weekly discovery — fetch top 50 one-week performers |
-| 2 | `GET /wallet/v2/pnl/summary` | Per-wallet PnL for snapshots and the whale detail page |
+| 1 | `GET /trader/gainers-losers` | Weekly discovery — top 50 one-week performers |
+| 2 | `GET /wallet/v2/pnl/summary` | Per-wallet PnL, snapshots, whale detail page |
 | 3 | `GET /wallet/v2/pnl/multiple` | Batch PnL fetch (10 wallets per call) during discovery |
 | 4 | `GET /wallet/v2/net-worth-details` | Whale detail page — full portfolio breakdown |
 | 5 | `GET /wallet/v2/net-worth` | 6-hour snapshots — portfolio net worth value |
 
-### Token Intelligence Endpoints
+### Token Intelligence Endpoints (Enrichment)
 
 | # | Endpoint | Used For |
 |---|---|---|
-| 9 | `GET /defi/token_security` | Token security score and honeypot flag |
+| 9 | `GET /defi/token_security` | Security score and honeypot flag |
 | 10 | `GET /defi/v3/price-stats/single` | 24h price momentum and volume stats |
 | 11 | `GET /defi/v3/token/holder` | Holder count |
-| 12 | `GET /holder/v1/distribution` | Holder distribution (top 10 concentration) |
-| 13 | `GET /smart-money/v1/token/list` | Smart money token list (cached 1 hour in DB) |
-| 14 | `GET /defi/token_overview` | Market cap, liquidity, symbol, name |
-| 15 | `GET /defi/v3/token/trade-data/single` | Real-time trade stats (buy/sell counts, volume) |
-| 16 | `GET /defi/v3/token/txs` | Recent transactions — REST polling fallback |
+| 12 | `GET /holder/v1/distribution` | Holder distribution analysis |
+| 13 | `GET /smart-money/v1/token/list` | Smart money token list (1-hr cache) |
+| 14 | `GET /defi/token_overview` | Market cap, liquidity, symbol |
+| 15 | `GET /defi/v3/token/trade-data/single` | Buy/sell counts, volume |
+| 16 | `GET /defi/v3/token/txs` | Recent txs (polling fallback only) |
 
 > Endpoints 6, 7, 8, and 17 are implemented in `birdeye.py` but not called in production to conserve compute units.
+
+### Future: Birdeye WebSocket
+
+**Planned upgrade:** When budget allows, we will integrate **Birdeye WebSocket endpoints** for:
+- Real-time large trade alerts (`SUBSCRIBE_LARGE_TRADE_TXS`)
+- Per-wallet transaction streams (`SUBSCRIBE_WALLET_TXS`)
+- Automatic fallback for Solana RPC rate limiting
+
+This will provide ultra-low-latency (1–2s) trade detection alongside existing Solana RPC monitoring. No code changes needed — just swap the RPC endpoint in `.env`.
 
 ---
 
@@ -446,7 +494,7 @@ zentryx/
 |   |
 |   +-- services/
 |   |   +-- birdeye.py               # Async Birdeye client — 17 endpoints with retry
-|   |   +-- birdeye_ws.py            # Birdeye WebSocket listener (degrades gracefully)
+|   |   +-- solana_rpc_ws.py         # Solana RPC WebSocket — real-time accountSubscribe
 |   |   +-- polling_worker.py        # REST polling fallback — 6 tokens, 20-min interval
 |   |   +-- enrichment.py            # Trade enrichment pipeline + 6-hr token cache
 |   |   +-- snapshot.py              # 6-hour wallet snapshot capture + TTL cleanup
@@ -473,7 +521,13 @@ zentryx/
 
 ## Quota & Cost Optimisation
 
-Zentryx is engineered to maximise data freshness within the Birdeye free-tier compute unit (CU) budget.
+Zentryx is engineered to maximise real-time trade detection while staying within free-tier compute constraints.
+
+### Real-Time Detection (Solana RPC WebSocket)
+
+No compute units consumed — Solana RPC public endpoints are free and unthrottled. Whale wallets are monitored 24/7 via `accountSubscribe` for instant trade detection.
+
+**Fallback:** If Solana RPC becomes rate-limited, the REST polling worker automatically takes over.
 
 ### Token Enrichment Cache (6-hour TTL)
 
@@ -487,7 +541,7 @@ The smart-money token list (endpoint 13) is fetched once per hour and stored in 
 
 The polling worker monitors 6 tokens at a 1,200-second interval (reduced from 300s). Polling cost was reduced by **75%** with this change alone.
 
-### Estimated Daily Budget
+### Estimated Daily Compute Unit Budget
 
 | Operation | Frequency | CU / day |
 |---|---|---|
@@ -495,8 +549,11 @@ The polling worker monitors 6 tokens at a 1,200-second interval (reduced from 30
 | 6-hour snapshots (15 wallets × 2 endpoints) | 4× per day | ~120 |
 | REST polling (6 tokens × 20-min interval) | 72 polls / day | ~36 |
 | Token enrichment (cache miss only) | Per unique token | ~8 per miss |
+| **Real-time trade detection (Solana RPC)** | Continuous | **0** |
 | Telegram commands | On demand | **0** |
-| **Estimated total** | | **~160 CU / day** |
+| **Estimated total** | | **~158–200 CU / day** |
+
+> **Note:** Solana RPC usage is free and unlimited. Compute units are only spent on Birdeye enrichment (token security, honeypot detection) which happens *after* a trade is detected.
 
 ### APScheduler Jobs
 
