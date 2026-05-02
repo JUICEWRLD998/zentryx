@@ -55,7 +55,7 @@ _DEFAULT_HTTP_URL = "https://api.mainnet-beta.solana.com"
 
 RECONNECT_DELAY_SECS = 5
 MAX_RECONNECT_DELAY_SECS = 300        # 5-minute cap
-_MIN_USD_VALUE = 500.0                # pre-filter: skip tiny moves before enrichment
+_MIN_USD_VALUE = 1000.0                # pre-filter: skip tiny moves before enrichment
 _SEEN_SIGNATURES_MAX = 10_000        # dedup cache cap
 _SIGNATURE_FETCH_LIMIT = 5           # how many recent sigs to check per notification
 _SOL_PRICE_REFRESH_SECS = 60         # refresh SOL/USD price cache every minute
