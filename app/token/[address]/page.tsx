@@ -285,7 +285,7 @@ export default function TokenPage() {
                     />
                     <StatRow
                       label="SMART MONEY"
-                      value={report.smart_money_flag ? "YES" : "NO"}
+                      value={report.smart_money_flag ? "YES ✓" : "NO"}
                       valueClass={report.smart_money_flag ? "text-cyan" : "text-muted-foreground"}
                     />
                   </div>

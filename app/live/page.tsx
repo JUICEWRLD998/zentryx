@@ -247,7 +247,7 @@ function TokenModal({
                 />
                 <ScoreBar
                   label="SMART MONEY"
-                  value={report?.smart_money_flag ? "YES" : "NO"}
+                  value={report?.smart_money_flag ? "YES ✓" : "NO"}
                   color={report?.smart_money_flag ? "text-cyan" : "text-muted-foreground"}
                 />
               </div>
