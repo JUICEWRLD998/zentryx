@@ -1,8 +1,8 @@
 # Zentryx — Solana Whale Intelligence Terminal
 
-> Real-time on-chain whale tracking, copy-trading signals, and Telegram alerts powered by Solana RPC WebSocket, Rugcheck, and Dex Screener.
+> Real-time on-chain whale tracking, copy-trading signals, and Telegram alerts powered by Solana RPC WebSocket and Birdeye API.
 
-Zentryx automatically discovers the top-performing wallets on Solana, tracks their trades as they hit the blockchain in real-time, and enriches each event with deep token intelligence using cost-optimized free APIs. All data persists to PostgreSQL for historical analysis. Alerts are delivered instantly to your Telegram inbox — and the full trading picture is visualised through a live, WebSocket-powered dashboard.
+Zentryx automatically discovers the top-performing wallets on Solana, tracks their trades as they hit the blockchain, enriches each event with deep token intelligence, and persists everything to PostgreSQL for historical analysis. Alerts are delivered instantly to your Telegram inbox — and the full trading picture is visualised through a live, WebSocket-powered dashboard.
 
 ---
 
@@ -63,7 +63,7 @@ Zentryx automatically discovers the top-performing wallets on Solana, tracks the
 | Prisma Client Python | 0.15.0 | Type-safe async PostgreSQL ORM |
 | APScheduler | latest | Cron jobs (wallet discovery, snapshots, TTL cleanup) |
 | python-telegram-bot | latest | Bot commands and DM alerts |
-| httpx | latest | Async HTTP client with exponential-backoff retry |
+| httpx | latest | Async HTTP client for Birdeye with exponential-backoff retry |
 | Pydantic v2 | latest | Request / response schema validation |
 
 ### Infrastructure
@@ -72,9 +72,7 @@ Zentryx automatically discovers the top-performing wallets on Solana, tracks the
 |---|---|
 | Supabase (PostgreSQL) | Persistent storage — wallets, snapshots, trades, watchlists, cache |
 | Solana RPC (mainnet-beta) | Real-time whale trade detection via `accountSubscribe` WebSocket |
-| Birdeye API (free tier) | Wallet PnL analytics and smart-money token list (reduced scope) |
-| Rugcheck (free) | Token security scoring and honeypot detection |
-| Dex Screener (free) | Token price, momentum, liquidity, volume, and buy/sell ratio |
+| Birdeye API (free tier) | Token intelligence — security scoring, honeypot flags, market metrics |
 | Telegram Bot API | Command handling and real-time DM alerts |
 
 ---
@@ -106,7 +104,7 @@ Zentryx automatically discovers the top-performing wallets on Solana, tracks the
 |        +----------v------------------------------------------+  |
 |        |  Trade Enrichment Pipeline                        |  |
 |        |  1. Validate & filter (amount >= $2,000)          |  |
-|        |  2. Enrich with Rugcheck + Dex Screener           |  |
+|        |  2. Enrich with Birdeye (security, honeypot)      |  |
 |        |  3. Persist TradeEvent (dedup by signature)       |  |
 |        |  4. Broadcast via WebSocket manager               |  |
 |        |  5. Fire Telegram watchlist DMs                   |  |
@@ -230,11 +228,11 @@ If Solana RPC becomes unavailable, the polling worker monitors 6 popular tokens 
 
 ## Data Enrichment
 
-After a whale trade is detected (via Solana RPC or polling fallback), the enrichment pipeline adds token intelligence using **Rugcheck** (security scoring) and **Dex Screener** (price, momentum, liquidity) — both free, no API key required. Smart money detection uses Birdeye's smart-money token list (cached 1 hour).
+After a whale trade is detected (via Solana RPC or polling fallback), the enrichment pipeline adds token intelligence using Birdeye REST endpoints.
 
-### Birdeye API Endpoints (Wallet Intelligence Only)
+### Birdeye API Endpoints
 
-Zentryx now uses **6 Birdeye endpoints** (reduced from 13), all available on the free tier for wallet PnL analytics and smart-money detection:
+Zentryx uses **13 endpoints** from Birdeye, all available on the free tier:
 
 ### Wallet Endpoints
 
@@ -246,22 +244,20 @@ Zentryx now uses **6 Birdeye endpoints** (reduced from 13), all available on the
 | 4 | `GET /wallet/v2/net-worth-details` | Whale detail page — full portfolio breakdown |
 | 5 | `GET /wallet/v2/net-worth` | 6-hour snapshots — portfolio net worth value |
 
-### Token Intelligence Endpoints (Enrichment) — ⚠️ REPLACED
+### Token Intelligence Endpoints (Enrichment)
 
-**As of latest implementation, the following Birdeye endpoints have been replaced with free alternatives** (Rugcheck + Dex Screener) to eliminate compute-unit overhead:
+| # | Endpoint | Used For |
+|---|---|---|
+| 9 | `GET /defi/token_security` | Security score and honeypot flag |
+| 10 | `GET /defi/v3/price-stats/single` | 24h price momentum and volume stats |
+| 11 | `GET /defi/v3/token/holder` | Holder count |
+| 12 | `GET /holder/v1/distribution` | Holder distribution analysis |
+| 13 | `GET /smart-money/v1/token/list` | Smart money token list (1-hr cache) |
+| 14 | `GET /defi/token_overview` | Market cap, liquidity, symbol |
+| 15 | `GET /defi/v3/token/trade-data/single` | Buy/sell counts, volume |
+| 16 | `GET /defi/v3/token/txs` | Recent txs (polling fallback only) |
 
-| # | Endpoint | Old Use | Replacement | Reason |
-|---|---|---|---|---|
-| 9 | `GET /defi/token_security` | ~~Security score, honeypot flag~~ | **Rugcheck** `/v1/tokens/{mint}/report/summary` | No CU cost; superior honeypot/rug detection |
-| 10 | `GET /defi/v3/price-stats/single` | ~~24h price momentum~~ | **Dex Screener** `/latest/dex/tokens/{address}` | No CU cost; real 24h price change data |
-| 11 | `GET /defi/v3/token/holder` | ~~Holder count~~ | Not actively used | Removed from pipeline |
-| 12 | `GET /holder/v1/distribution` | ~~Holder distribution~~ | Not actively used | Removed from pipeline |
-| 13 | `GET /smart-money/v1/token/list` | **Smart money token list (1-hr cache)** | ✅ Still used | Cheap endpoint; DB-cached 1 hour |
-| 14 | `GET /defi/token_overview` | ~~Market cap, liquidity, symbol~~ | **Dex Screener** (best pair data) | No CU cost; picks highest-liquidity pair |
-| 15 | `GET /defi/v3/token/trade-data/single` | ~~Buy/sell counts, volume~~ | **Dex Screener** (txns + volume) | No CU cost; same data in pair response |
-| 16 | `GET /defi/v3/token/txs` | Recent txs (polling fallback) | ✅ Still used | Polling worker only; rare fallback |
-
-**Migration complete and deployed to bot + app.** Both clients and backend have been updated to use Rugcheck + Dex Screener for real-time token enrichment.
+> Endpoints 6, 7, 8, and 17 are implemented in `birdeye.py` but not called in production to conserve compute units.
 
 ### Future: Birdeye WebSocket
 

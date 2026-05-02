@@ -154,6 +154,24 @@ async def get_top_traders(token_address: str, limit: int = 20) -> dict[str, Any]
     )
 
 
+async def get_token_security(token_address: str) -> dict[str, Any]:
+    """Endpoint 9 — /defi/token_security"""
+    return await _get("/defi/token_security", params={"address": token_address})
+
+
+async def get_price_stats(token_address: str) -> dict[str, Any]:
+    """Endpoint 10 — /defi/v3/price-stats/single"""
+    return await _get("/defi/v3/price-stats/single", params={"address": token_address})
+
+
+async def get_token_holders(token_address: str) -> dict[str, Any]:
+    """Endpoint 11 — /defi/v3/token/holder"""
+    return await _get("/defi/v3/token/holder", params={"address": token_address})
+
+
+async def get_holder_distribution(token_address: str) -> dict[str, Any]:
+    """Endpoint 12 — /holder/v1/distribution"""
+    return await _get("/holder/v1/distribution", params={"address": token_address})
 
 
 async def get_smart_money_tokens(limit: int = 50) -> dict[str, Any]:
@@ -161,3 +179,28 @@ async def get_smart_money_tokens(limit: int = 50) -> dict[str, Any]:
     return await _get("/smart-money/v1/token/list", params={"limit": limit})
 
 
+async def get_token_overview(token_address: str) -> dict[str, Any]:
+    """Endpoint 14 — /defi/token_overview"""
+    return await _get("/defi/token_overview", params={"address": token_address})
+
+
+async def get_token_trade_data(token_address: str) -> dict[str, Any]:
+    """Endpoint 15 — /defi/v3/token/trade-data/single"""
+    return await _get("/defi/v3/token/trade-data/single", params={"address": token_address})
+
+
+async def get_token_txs(
+    token_address: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Endpoint 16 — /defi/v3/token/txs"""
+    return await _get(
+        "/defi/v3/token/txs",
+        params={"address": token_address, "limit": limit, "offset": offset},
+    )
+
+
+async def get_exit_liquidity(token_address: str) -> dict[str, Any]:
+    """Endpoint 17 — /defi/v3/token/exit-liquidity"""
+    return await _get("/defi/v3/token/exit-liquidity", params={"address": token_address})
