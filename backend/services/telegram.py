@@ -467,6 +467,11 @@ async def _handle_help(bot: Bot, update: Update) -> None:
         "/watch [address] — add a whale to your personal watchlist\n"
         "/unwatch [address] — remove a whale from your watchlist\n"
         "/my-wallets — view your personal watchlist\n"
+        "/track [token] [tp%] [sl%] — open a paper trade at current price\n"
+        "/my-trades — view your open and recent paper trades\n"
+        "/alert [token] [price] [above|below] — set a price alert\n"
+        "/my-alerts — view your active price alerts\n"
+        "/cancel-alert [id] — cancel a price alert\n"
         "/help — show this message\n\n"
         "🔔 Trade alerts are sent automatically when a tracked whale makes a $2,000+ trade.\n"
         "📩 Watchlist alerts are DM'd directly to you for wallets you /watch."
@@ -674,6 +679,313 @@ async def _handle_my_wallets(bot: Bot, update: Update) -> None:
     logger.info("Responded to /my-wallets from user %s — %d items.", telegram_user_id, len(items))
 
 
+async def _handle_track(bot: Bot, update: Update) -> None:
+    """/track <token_address> [tp%] [sl%] — open a paper trade at current price."""
+    chat_id = update.message.chat.id
+    telegram_user_id = update.message.from_user.id
+    parts = (update.message.text or "").strip().split()
+
+    if len(parts) < 2:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "ℹ️ Usage: <code>/track [token_address] [tp%] [sl%]</code>\n"
+                "Example: <code>/track DezXAZ8z7Pnr 40 -15</code>\n"
+                "Opens a virtual BUY at current price with 40% TP and 15% SL."
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    token_address = parts[1]
+    tp_pct = float(parts[2]) if len(parts) >= 3 else None
+    sl_pct = float(parts[3]) if len(parts) >= 4 else None
+
+    # Fetch price
+    try:
+        from services import birdeye
+        raw = await birdeye.get_token_price(token_address)
+        entry_price = float((raw.get("data") or {}).get("value") or 0)
+        symbol = token_address[:8]
+        # Try to get symbol from overview
+        try:
+            ov = await birdeye.get_token_overview(token_address)
+            sym = (ov.get("data") or {}).get("symbol")
+            if sym:
+                symbol = sym
+        except Exception:
+            pass
+    except Exception as exc:
+        await bot.send_message(chat_id=chat_id, text=f"❌ Failed to fetch price: {exc}", parse_mode="HTML")
+        return
+
+    if not entry_price:
+        await bot.send_message(chat_id=chat_id, text="❌ Could not resolve token price. Check the address.", parse_mode="HTML")
+        return
+
+    import db
+    if not db.is_available():
+        await bot.send_message(chat_id=chat_id, text="⚠️ Database not available.", parse_mode="HTML")
+        return
+
+    import uuid
+    from datetime import datetime, timezone
+    from db import paper_trade_table, get_session
+    trade_id = str(uuid.uuid4())
+    now = datetime.now(tz=timezone.utc)
+    async with get_session() as session:
+        await session.execute(
+            paper_trade_table.insert().values(
+                id=trade_id,
+                telegram_user_id=telegram_user_id,
+                token_address=token_address,
+                symbol=symbol,
+                side="BUY",
+                entry_price=entry_price,
+                entry_time=now,
+                tp_pct=tp_pct,
+                sl_pct=sl_pct,
+                position_size_usd=None,
+                status="open",
+                exit_price=None,
+                exit_time=None,
+                pnl_pct=None,
+                close_reason=None,
+                created_at=now,
+            )
+        )
+
+    tp_str = f"+{tp_pct}%" if tp_pct is not None else "None"
+    sl_str = f"{sl_pct}%" if sl_pct is not None else "None"
+    await bot.send_message(
+        chat_id=chat_id,
+        text=(
+            f"✅ <b>Paper trade opened</b>\n\n"
+            f"Token: <b>${symbol}</b>\n"
+            f"Entry: <b>${entry_price:.6g}</b>\n"
+            f"Take-profit: {tp_str}  |  Stop-loss: {sl_str}\n\n"
+            f"I'll DM you when the target is hit.\n"
+            f"Use /my-trades to see all open positions."
+        ),
+        parse_mode="HTML",
+    )
+    logger.info("User %s opened paper trade on %s at $%s", telegram_user_id, symbol, entry_price)
+
+
+async def _handle_my_trades(bot: Bot, update: Update) -> None:
+    """/my-trades — list all open and recently closed paper trades."""
+    chat_id = update.message.chat.id
+    telegram_user_id = update.message.from_user.id
+
+    import db
+    if not db.is_available():
+        await bot.send_message(chat_id=chat_id, text="⚠️ Database not available.", parse_mode="HTML")
+        return
+
+    from sqlalchemy import select
+    from db import paper_trade_table, get_session
+    async with get_session() as session:
+        result = await session.execute(
+            select(paper_trade_table)
+            .where(paper_trade_table.c.telegram_user_id == telegram_user_id)
+            .order_by(paper_trade_table.c.created_at.desc())
+            .limit(10)
+        )
+        trades = result.fetchall()
+
+    if not trades:
+        await bot.send_message(
+            chat_id=chat_id,
+            text="📊 No paper trades yet. Use <code>/track [token]</code> to start one.",
+            parse_mode="HTML",
+        )
+        return
+
+    lines = ["<b>Your Paper Trades</b>\n"]
+    for t in trades:
+        status_emoji = "🟢" if t.status == "open" else ("🎯" if t.close_reason == "tp" else ("🛑" if t.close_reason == "sl" else "⚪"))
+        pnl_str = ""
+        if t.pnl_pct is not None:
+            sign = "+" if t.pnl_pct >= 0 else ""
+            pnl_str = f" | <b>{sign}{t.pnl_pct:.2f}%</b>"
+        lines.append(
+            f"{status_emoji} <b>${t.symbol}</b> @${t.entry_price:.6g}{pnl_str} [{t.status}]"
+        )
+
+    lines.append("\nUse /track to open a new position.")
+    await bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
+
+
+async def _handle_alert(bot: Bot, update: Update) -> None:
+    """/alert <token_address> <price> [above|below] — set a price alert."""
+    chat_id = update.message.chat.id
+    telegram_user_id = update.message.from_user.id
+    parts = (update.message.text or "").strip().split()
+
+    if len(parts) < 3:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "ℹ️ Usage: <code>/alert [token_address] [price] [above|below]</code>\n"
+                "Example: <code>/alert DezXAZ8z7Pnr 0.000045 above</code>\n"
+                "Defaults to 'above' if direction not specified."
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    token_address = parts[1]
+    try:
+        target_price = float(parts[2])
+    except ValueError:
+        await bot.send_message(chat_id=chat_id, text="❌ Invalid price. Use a number like 0.000045", parse_mode="HTML")
+        return
+
+    direction = parts[3].lower() if len(parts) >= 4 else "above"
+    if direction not in ("above", "below"):
+        direction = "above"
+
+    import db
+    if not db.is_available():
+        await bot.send_message(chat_id=chat_id, text="⚠️ Database not available.", parse_mode="HTML")
+        return
+
+    import uuid
+    from datetime import datetime, timezone
+    from db import price_alert_table, get_session
+    from services import birdeye
+
+    symbol = token_address[:8]
+    try:
+        ov = await birdeye.get_token_overview(token_address)
+        sym = (ov.get("data") or {}).get("symbol")
+        if sym:
+            symbol = sym
+    except Exception:
+        pass
+
+    alert_id = str(uuid.uuid4())
+    now = datetime.now(tz=timezone.utc)
+    async with get_session() as session:
+        await session.execute(
+            price_alert_table.insert().values(
+                id=alert_id,
+                telegram_user_id=telegram_user_id,
+                token_address=token_address,
+                symbol=symbol,
+                target_price=target_price,
+                direction=direction,
+                created_at=now,
+                triggered_at=None,
+                status="active",
+            )
+        )
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text=(
+            f"🔔 <b>Price alert set</b>\n\n"
+            f"Token: <b>${symbol}</b>\n"
+            f"Alert when price goes <b>{direction}</b> ${target_price:.6g}\n\n"
+            f"I'll DM you when triggered.\n"
+            f"Use /my-alerts to manage your alerts."
+        ),
+        parse_mode="HTML",
+    )
+    logger.info("User %s set price alert on %s %s $%s", telegram_user_id, symbol, direction, target_price)
+
+
+async def _handle_my_alerts(bot: Bot, update: Update) -> None:
+    """/my-alerts — list active price alerts."""
+    chat_id = update.message.chat.id
+    telegram_user_id = update.message.from_user.id
+
+    import db
+    if not db.is_available():
+        await bot.send_message(chat_id=chat_id, text="⚠️ Database not available.", parse_mode="HTML")
+        return
+
+    from sqlalchemy import select
+    from db import price_alert_table, get_session
+    async with get_session() as session:
+        result = await session.execute(
+            select(price_alert_table)
+            .where(
+                price_alert_table.c.telegram_user_id == telegram_user_id,
+                price_alert_table.c.status == "active",
+            )
+            .order_by(price_alert_table.c.created_at.desc())
+        )
+        alerts = result.fetchall()
+
+    if not alerts:
+        await bot.send_message(
+            chat_id=chat_id,
+            text="🔔 No active alerts. Use <code>/alert [token] [price]</code> to set one.",
+            parse_mode="HTML",
+        )
+        return
+
+    lines = [f"<b>Your Active Alerts ({len(alerts)})</b>\n"]
+    for a in alerts:
+        lines.append(f"🔔 <b>${a.symbol}</b> {a.direction} ${a.target_price:.6g}  [<code>{a.id[:8]}</code>]")
+    lines.append("\nUse <code>/cancel-alert [id]</code> to remove one.")
+    await bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
+
+
+async def _handle_cancel_alert(bot: Bot, update: Update) -> None:
+    """/cancel-alert <id> — cancel a price alert by its short ID."""
+    chat_id = update.message.chat.id
+    telegram_user_id = update.message.from_user.id
+    parts = (update.message.text or "").strip().split()
+
+    if len(parts) < 2:
+        await bot.send_message(
+            chat_id=chat_id,
+            text="ℹ️ Usage: <code>/cancel-alert [id]</code>\nFind alert IDs with /my-alerts.",
+            parse_mode="HTML",
+        )
+        return
+
+    short_id = parts[1].lower()
+
+    import db
+    if not db.is_available():
+        await bot.send_message(chat_id=chat_id, text="⚠️ Database not available.", parse_mode="HTML")
+        return
+
+    from sqlalchemy import select, func
+    from sqlalchemy import update as sa_update
+    from db import price_alert_table, get_session
+    async with get_session() as session:
+        result = await session.execute(
+            select(price_alert_table).where(
+                price_alert_table.c.telegram_user_id == telegram_user_id,
+                price_alert_table.c.status == "active",
+                func.lower(price_alert_table.c.id).like(short_id + "%"),
+            )
+        )
+        alert = result.fetchone()
+
+    if not alert:
+        await bot.send_message(chat_id=chat_id, text=f"❌ No active alert matching <code>{short_id}</code>.", parse_mode="HTML")
+        return
+
+    from datetime import datetime, timezone
+    async with get_session() as session:
+        await session.execute(
+            sa_update(price_alert_table)
+            .where(price_alert_table.c.id == alert.id)
+            .values(status="cancelled")
+        )
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text=f"✅ Alert for <b>${alert.symbol}</b> {alert.direction} ${alert.target_price:.6g} cancelled.",
+        parse_mode="HTML",
+    )
+
+
 async def _handle_test_alert(bot: Bot, update: Update) -> None:
     """Handle /test_alert — send a mock trade alert to verify formatting."""
     chat_id = update.message.chat.id
@@ -732,6 +1044,16 @@ async def _dispatch(bot: Bot, update: Update) -> None:
         await _handle_unwatch(bot, update)
     elif text.startswith("/my-wallets") or text == "/my-wallets":
         await _handle_my_wallets(bot, update)
+    elif text.startswith("/track ") or text == "/track":
+        await _handle_track(bot, update)
+    elif text.startswith("/my-trades") or text == "/my-trades":
+        await _handle_my_trades(bot, update)
+    elif text.startswith("/alert ") or text == "/alert":
+        await _handle_alert(bot, update)
+    elif text.startswith("/my-alerts") or text == "/my-alerts":
+        await _handle_my_alerts(bot, update)
+    elif text.startswith("/cancel-alert ") or text == "/cancel-alert":
+        await _handle_cancel_alert(bot, update)
     elif text.startswith("/test_alert") or text == "/test_alert":
         await _handle_test_alert(bot, update)
     # Unknown commands silently ignored
@@ -748,7 +1070,7 @@ async def run_bot_command_loop() -> None:
         logger.warning("Telegram bot token not set — command loop disabled.")
         return
 
-    logger.info("Telegram command loop started — listening for /start, /wallets, /stats, /top, /wallet, /filter, /watch, /unwatch, /my-wallets, /help")
+    logger.info("Telegram command loop started — listening for /start, /wallets, /stats, /top, /wallet, /filter, /watch, /unwatch, /my-wallets, /track, /my-trades, /alert, /my-alerts, /cancel-alert, /help")
     offset: int | None = None
 
     while True:

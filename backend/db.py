@@ -128,6 +128,39 @@ token_enrichment_cache_table = Table(
     Column("volume_24h", Float, nullable=True),
 )
 
+paper_trade_table = Table(
+    "paper_trade", metadata,
+    Column("id", String, primary_key=True),
+    Column("telegram_user_id", BigInteger, nullable=False),
+    Column("token_address", String, nullable=False),
+    Column("symbol", String, nullable=True),
+    Column("side", String, nullable=False),           # BUY / SELL
+    Column("entry_price", Float, nullable=False),
+    Column("entry_time", DateTime(timezone=True), nullable=False),
+    Column("tp_pct", Float, nullable=True),           # take-profit % (e.g. 40.0)
+    Column("sl_pct", Float, nullable=True),           # stop-loss % (e.g. -15.0)
+    Column("position_size_usd", Float, nullable=True),
+    Column("status", String, nullable=False),         # open / closed / cancelled
+    Column("exit_price", Float, nullable=True),
+    Column("exit_time", DateTime(timezone=True), nullable=True),
+    Column("pnl_pct", Float, nullable=True),
+    Column("close_reason", String, nullable=True),    # tp / sl / manual
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
+price_alert_table = Table(
+    "price_alert", metadata,
+    Column("id", String, primary_key=True),
+    Column("telegram_user_id", BigInteger, nullable=False),
+    Column("token_address", String, nullable=False),
+    Column("symbol", String, nullable=True),
+    Column("target_price", Float, nullable=False),
+    Column("direction", String, nullable=False),      # above / below
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("triggered_at", DateTime(timezone=True), nullable=True),
+    Column("status", String, nullable=False),         # active / triggered / cancelled
+)
+
 
 async def connect() -> None:
     """Initialize async engine and create all tables if they don't exist."""

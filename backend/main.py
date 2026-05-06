@@ -28,11 +28,13 @@ load_dotenv(Path(__file__).parent / ".env")  # Load backend/.env regardless of C
 import db
 from routers.wallets import router as wallets_router
 from routers.ws import router as ws_router
+from routers.trades import router as trades_router
 from scheduler import scheduler
 from services.solana_rpc_ws import run_solana_rpc_ws
 from services.enrichment import process_trade_event
 from services.telegram import run_bot_command_loop, send_startup_message
 from services.wallet_discovery import discover_wallets
+from services.price_monitor import run_price_monitor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 _ws_task: asyncio.Task | None = None
 _bot_task: asyncio.Task | None = None
+_monitor_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
@@ -58,6 +61,8 @@ async def lifespan(app: FastAPI):
     logger.info("Solana RPC WebSocket listener started.")
     _bot_task = asyncio.create_task(run_bot_command_loop())
     logger.info("Telegram bot command loop started.")
+    _monitor_task = asyncio.create_task(run_price_monitor())
+    logger.info("Price monitor started.")
     await send_startup_message()
     logger.info("Startup complete.")
     yield
@@ -66,6 +71,8 @@ async def lifespan(app: FastAPI):
         _ws_task.cancel()
     if _bot_task and not _bot_task.done():
         _bot_task.cancel()
+    if _monitor_task and not _monitor_task.done():
+        _monitor_task.cancel()
     scheduler.shutdown(wait=False)
     await db.disconnect()
     logger.info("Zentryx backend shut down.")
@@ -89,12 +96,13 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
 
 app.include_router(wallets_router)
 app.include_router(ws_router)
+app.include_router(trades_router)
 
 
 @app.get("/health")
