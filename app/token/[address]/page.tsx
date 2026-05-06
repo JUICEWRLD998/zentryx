@@ -97,7 +97,7 @@ function SecurityRadial({ score }: { score: number | null }) {
   return (
     <div className="flex flex-col items-center gap-1">
       <div className="relative w-32 h-20">
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width={128} height={80}>
           <RadialBarChart
             cx="50%"
             cy="100%"
@@ -135,7 +135,7 @@ function BuySellPie({ ratio }: { ratio: number | null }) {
   return (
     <div className="flex items-center gap-3">
       <div className="w-12 h-12">
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width={48} height={48}>
           <PieChart>
             <Pie data={data} dataKey="value" cx="50%" cy="50%" innerRadius="50%" outerRadius="80%" strokeWidth={0}>
               <Cell fill="#22c55e" />
