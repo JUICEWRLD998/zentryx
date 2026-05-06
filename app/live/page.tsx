@@ -364,6 +364,7 @@ export default function LivePage() {
         <nav className="hidden sm:flex items-center gap-6 font-mono text-xs text-muted-foreground">
           <Link href="/" className="hover:text-foreground transition-colors">LEADERBOARD</Link>
           <span className="text-foreground border-b border-buy pb-0.5">LIVE FEED</span>
+          <Link href="/movers" className="hover:text-foreground transition-colors">MOVERS</Link>
         </nav>
       </header>
 

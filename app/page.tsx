@@ -155,6 +155,7 @@ export default function Landing() {
         <nav className="hidden md:flex items-center gap-6 font-mono text-xs text-muted-foreground">
           <Link href="/dashboard" className="hover:text-foreground transition-colors">DASHBOARD</Link>
           <Link href="/live" className="hover:text-foreground transition-colors">LIVE FEED</Link>
+          <Link href="/movers" className="hover:text-foreground transition-colors">MOVERS</Link>
           <a
             href={TELEGRAM_BOT_URL}
             target="_blank"

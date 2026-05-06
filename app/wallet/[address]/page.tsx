@@ -90,6 +90,7 @@ export default function WalletPage() {
         <nav className="hidden sm:flex items-center gap-6 font-mono text-xs text-muted-foreground">
           <Link href="/" className="hover:text-foreground transition-colors">LEADERBOARD</Link>
           <Link href="/live" className="hover:text-foreground transition-colors">LIVE FEED</Link>
+          <Link href="/movers" className="hover:text-foreground transition-colors">MOVERS</Link>
         </nav>
       </header>
 
