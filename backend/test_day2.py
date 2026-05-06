@@ -130,7 +130,7 @@ def test_consensus_tracker() -> None:
 
 
 async def test_gemini_analyse_trade() -> None:
-    """Live Gemini call — verifies API key works and response is valid JSON."""
+    """Live Groq call — verifies API key works and response is valid JSON."""
     from services.gemini import analyse_trade
 
     result = await analyse_trade(
@@ -151,23 +151,22 @@ async def test_gemini_analyse_trade() -> None:
     )
 
     if result is None:
-        # Check if it's a quota/billing issue vs a code bug
-        record(SKIP, "Gemini — SKIPPED (billing not enabled on GCP project — code is correct, pipeline degrades gracefully)")
+        record(FAIL, "Groq — analyse_trade returned None (check GROQ_API_KEY)")
         return
 
     rec = result.get("recommendation", "")
     analysis = result.get("analysis", "")
 
     if rec in ("STRONG_BUY", "BUY", "HOLD", "SELL", "AVOID"):
-        record(PASS, "Gemini — recommendation is valid enum", rec)
+        record(PASS, "Groq — recommendation is valid enum", rec)
     else:
-        record(FAIL, "Gemini — unexpected recommendation", rec)
+        record(FAIL, "Groq — unexpected recommendation", rec)
 
     if len(analysis) > 30:
-        record(PASS, "Gemini — analysis text returned", f"{len(analysis)} chars")
-        print(f"\n  --- Gemini Analysis ---\n  {analysis}\n  -----------------------")
+        record(PASS, "Groq — analysis text returned", f"{len(analysis)} chars")
+        print(f"\n  --- Groq Analysis ---\n  {analysis}\n  ---------------------")
     else:
-        record(FAIL, "Gemini — analysis too short or empty", analysis)
+        record(FAIL, "Groq — analysis too short or empty", analysis)
 
 
 def test_schema_new_fields() -> None:
