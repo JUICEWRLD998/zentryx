@@ -259,9 +259,9 @@ async def get_new_listings(
     limit: int = 20,
     offset: int = 0,
 ) -> dict[str, Any]:
-    """Endpoint 21 — /defi/v2/tokens/new-listing — recently created tokens."""
+    """Endpoint 21 — /defi/v2/tokens/new_listing — recently created tokens."""
     return await _get(
-        "/defi/v2/tokens/new-listing",
+        "/defi/v2/tokens/new_listing",
         params={"limit": limit, "offset": offset},
     )
 
@@ -284,15 +284,23 @@ async def get_wallet_portfolio(wallet: str) -> dict[str, Any]:
 # 6. Smart money flow (premium)
 # ---------------------------------------------------------------------------
 
-async def get_smart_money_inflow_outflow(
-    token_address: str,
-    time_frame: str = "24h",
+async def get_token_trending(
+    sort_by: str = "rank",
+    sort_type: str = "asc",
+    offset: int = 0,
+    limit: int = 20,
 ) -> dict[str, Any]:
-    """Endpoint 24 — /smart-money/v1/token/inflow-outflow — net smart money flow.
+    """Endpoint 24 — /defi/token_trending — curated trending token list by rank.
 
-    time_frame options: 1h, 4h, 24h
+    Separate from tokenlist (endpoint 20) which ranks by volume;
+    this uses Birdeye's editorial trending rank.
     """
     return await _get(
-        "/smart-money/v1/token/inflow-outflow",
-        params={"address": token_address, "type": time_frame},
+        "/defi/token_trending",
+        params={
+            "sort_by": sort_by,
+            "sort_type": sort_type,
+            "offset": offset,
+            "limit": limit,
+        },
     )
