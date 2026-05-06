@@ -411,6 +411,7 @@ export default function TokenPage() {
           <Link href="/" className="hover:text-foreground transition-colors">LEADERBOARD</Link>
           <Link href="/live" className="hover:text-foreground transition-colors">LIVE FEED</Link>
           <Link href="/movers" className="hover:text-foreground transition-colors">MOVERS</Link>
+          <Link href="/heatmap" className="hover:text-foreground transition-colors">HEATMAP</Link>
         </nav>
       </header>
 

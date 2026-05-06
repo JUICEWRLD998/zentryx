@@ -365,6 +365,7 @@ export default function LivePage() {
           <Link href="/" className="hover:text-foreground transition-colors">LEADERBOARD</Link>
           <span className="text-foreground border-b border-buy pb-0.5">LIVE FEED</span>
           <Link href="/movers" className="hover:text-foreground transition-colors">MOVERS</Link>
+          <Link href="/heatmap" className="hover:text-foreground transition-colors">HEATMAP</Link>
         </nav>
       </header>
 

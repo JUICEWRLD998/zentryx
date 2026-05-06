@@ -232,3 +232,39 @@ async def trigger_discovery() -> dict:
 
     asyncio.create_task(discover_wallets())
     return {"message": "Wallet discovery triggered."}
+
+
+@router.get("/wallets/{address}/portfolio")
+async def wallet_portfolio(address: str) -> list[dict]:
+    """
+    Portfolio X-Ray — current token holdings for a wallet.
+    Each item: address, symbol, name, logo_uri, amount, price_usd, usd_value, allocation_pct
+    """
+    from fastapi import HTTPException
+    try:
+        raw = await birdeye.get_wallet_portfolio(address)
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to fetch portfolio: {exc}")
+
+    items = (raw.get("data") or {}).get("items") or []
+    # Filter dust (< $0.01) and sort by value descending
+    items = [i for i in items if (i.get("valueUsd") or 0) >= 0.01]
+    items.sort(key=lambda x: x.get("valueUsd") or 0, reverse=True)
+
+    total_usd = sum(i.get("valueUsd") or 0 for i in items)
+
+    return [
+        {
+            "address": item["address"],
+            "symbol": item.get("symbol") or item["address"][:8],
+            "name": item.get("name") or "",
+            "logo_uri": item.get("logoURI") or item.get("icon") or "",
+            "amount": item.get("uiAmount") or 0,
+            "price_usd": item.get("priceUsd") or 0,
+            "usd_value": item.get("valueUsd") or 0,
+            "allocation_pct": round(
+                (item.get("valueUsd") or 0) / total_usd * 100, 1
+            ) if total_usd > 0 else 0,
+        }
+        for item in items
+    ]

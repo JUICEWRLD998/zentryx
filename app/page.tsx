@@ -156,6 +156,7 @@ export default function Landing() {
           <Link href="/dashboard" className="hover:text-foreground transition-colors">DASHBOARD</Link>
           <Link href="/live" className="hover:text-foreground transition-colors">LIVE FEED</Link>
           <Link href="/movers" className="hover:text-foreground transition-colors">MOVERS</Link>
+          <Link href="/heatmap" className="hover:text-foreground transition-colors">HEATMAP</Link>
           <a
             href={TELEGRAM_BOT_URL}
             target="_blank"

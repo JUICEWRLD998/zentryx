@@ -174,3 +174,133 @@ async def get_movers() -> dict:
     )[:10]
 
     return {"gainers": gainers, "losers": losers}
+
+
+# ── Smart Money Heatmap ─────────────────────────────────────────────────────
+
+@router.get("/heatmap")
+async def get_heatmap() -> dict:
+    """
+    Smart Money Heatmap — net buy/sell USD per token per time bucket.
+    Tries 6h window with 1h buckets; falls back to 24h / 4h buckets if sparse.
+
+    Returns:
+        tokens: [{address, symbol}]  (top 10 by activity)
+        buckets: ["HH:MM", ...]      (column labels)
+        cells: [[net_usd, ...], ...]  (rows=tokens, cols=buckets)
+        bucket_hours: int
+    """
+    if not db.is_available():
+        return {"tokens": [], "buckets": [], "cells": [], "bucket_hours": 1}
+
+    from collections import defaultdict
+    from datetime import timedelta
+
+    now = datetime.now(tz=timezone.utc)
+    WINDOWS = [
+        (timedelta(hours=6),  timedelta(hours=1)),
+        (timedelta(hours=24), timedelta(hours=4)),
+    ]
+
+    for window, bucket_size in WINDOWS:
+        since = now - window
+        num_buckets = int(window / bucket_size)
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(trade_event_table)
+                .where(trade_event_table.c.timestamp >= since)
+                .order_by(trade_event_table.c.timestamp.asc())
+            )
+            rows = result.fetchall()
+
+        if not rows:
+            continue
+
+        token_symbols: dict[str, str] = {}
+        bucket_matrix: dict[str, dict[int, float]] = defaultdict(lambda: defaultdict(float))
+
+        for r in rows:
+            if not r.timestamp:
+                continue
+            ts = r.timestamp if r.timestamp.tzinfo else r.timestamp.replace(tzinfo=timezone.utc)
+            idx = int((ts - since).total_seconds() / bucket_size.total_seconds())
+            idx = max(0, min(idx, num_buckets - 1))
+            sign = 1 if r.side == "BUY" else -1
+            bucket_matrix[r.token_address][idx] += sign * (r.usd_value or 0)
+            if r.token_address not in token_symbols:
+                token_symbols[r.token_address] = r.token_symbol or r.token_address[:8]
+
+        if not bucket_matrix:
+            continue
+
+        # Top 10 tokens by total absolute activity
+        top_tokens = sorted(
+            token_symbols.keys(),
+            key=lambda a: sum(abs(v) for v in bucket_matrix[a].values()),
+            reverse=True,
+        )[:10]
+
+        buckets = [
+            (since + i * bucket_size).strftime("%H:%M")
+            for i in range(num_buckets)
+        ]
+        cells = [
+            [round(bucket_matrix[addr].get(i, 0.0), 2) for i in range(num_buckets)]
+            for addr in top_tokens
+        ]
+
+        return {
+            "tokens": [{"address": a, "symbol": token_symbols[a]} for a in top_tokens],
+            "buckets": buckets,
+            "cells": cells,
+            "bucket_hours": int(bucket_size.total_seconds() / 3600),
+        }
+
+    return {"tokens": [], "buckets": [], "cells": [], "bucket_hours": 1}
+
+
+# ── Smart Money Overlap ─────────────────────────────────────────────────────
+
+@router.get("/tokens/overlap")
+async def get_overlap() -> list[dict]:
+    """
+    Returns tokens held/traded by 2+ tracked smart-money wallets, ranked by whale count.
+    """
+    if not db.is_available():
+        return []
+
+    from collections import defaultdict
+    from services.wallet_discovery import get_tracked_wallets
+
+    tracked = {w.address for w in get_tracked_wallets()}
+
+    async with get_session() as session:
+        result = await session.execute(
+            select(
+                trade_event_table.c.token_address,
+                trade_event_table.c.token_symbol,
+                trade_event_table.c.wallet_id,
+            ).distinct()
+        )
+        rows = result.fetchall()
+
+    token_wallets: dict[str, set] = defaultdict(set)
+    token_symbols: dict[str, str] = {}
+    for r in rows:
+        if r.wallet_id in tracked:
+            token_wallets[r.token_address].add(r.wallet_id)
+            if r.token_address not in token_symbols and r.token_symbol:
+                token_symbols[r.token_address] = r.token_symbol
+
+    overlap = [
+        {
+            "address": addr,
+            "symbol": token_symbols.get(addr) or addr[:8],
+            "whale_count": len(wallets),
+        }
+        for addr, wallets in token_wallets.items()
+        if len(wallets) >= 2
+    ]
+    overlap.sort(key=lambda x: x["whale_count"], reverse=True)
+    return overlap[:20]

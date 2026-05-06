@@ -91,6 +91,7 @@ export default function Dashboard() {
           <span className="text-foreground border-b border-buy pb-0.5">DASHBOARD</span>
           <Link href="/live" className="hover:text-foreground transition-colors">LIVE FEED</Link>
           <Link href="/movers" className="hover:text-foreground transition-colors">MOVERS</Link>
+          <Link href="/heatmap" className="hover:text-foreground transition-colors">HEATMAP</Link>
         </nav>
         <ThemeToggle />
       </header>
