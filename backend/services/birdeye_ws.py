@@ -20,9 +20,11 @@ from websockets.exceptions import ConnectionClosed
 
 logger = logging.getLogger(__name__)
 
-BIRDEYE_WS_URL = "wss://public-api.birdeye.so/socket"
+# API key is passed as a query param — the documented approach for Birdeye WS.
+# Chain is passed as a header alongside the key header for redundancy.
+BIRDEYE_WS_BASE = "wss://public-api.birdeye.so/socket"
 RECONNECT_DELAY_SECS = 5
-MAX_RECONNECT_DELAY_SECS = 300  # 5 minutes cap
+MAX_RECONNECT_DELAY_SECS = 120  # 2 minutes cap — premium plan, shorter backoff
 LARGE_TRADE_MIN_VOLUME = 10_000  # USD
 
 
@@ -42,15 +44,17 @@ async def _run_connection(on_event) -> None:
 
     api_key = os.getenv("BIRDEYE_API_KEY", "")
 
-    # Birdeye WS: pass API key as a header and chain as a header
+    # Pass the key both as a URL query param (primary) and as a header (fallback),
+    # matching Birdeye's documented WebSocket authentication approach.
+    ws_url = f"{BIRDEYE_WS_BASE}?x-api-key={api_key}"
     extra_headers = {
         "x-api-key": api_key,
         "x-chain": "solana",
     }
 
-    logger.info("Connecting to Birdeye WebSocket...")
+    logger.info("Connecting to Birdeye WebSocket (premium)...")
     async with websockets.connect(
-        BIRDEYE_WS_URL,
+        ws_url,
         additional_headers=extra_headers,
         ping_interval=20,
         ping_timeout=10,
@@ -81,30 +85,28 @@ async def _run_connection(on_event) -> None:
 async def run_birdeye_ws(on_event) -> None:
     """
     Main loop that keeps the Birdeye WS connection alive with auto-reconnect.
-    Call `on_event(payload)` for every incoming message.
+    Calls `on_event(payload)` for every incoming message.
 
-    On HTTP 403, logs a single clear warning about plan tier and backs off
-    to the maximum delay — the REST polling fallback will handle live data.
+    With a premium API key, 403s should not occur. Any errors use standard
+    exponential backoff up to MAX_RECONNECT_DELAY_SECS.
     """
     delay = RECONNECT_DELAY_SECS
     while True:
         try:
             await _run_connection(on_event)
-            delay = RECONNECT_DELAY_SECS  # reset on clean run
+            delay = RECONNECT_DELAY_SECS  # reset on clean disconnect
         except ConnectionClosed as exc:
             logger.warning("Birdeye WS closed (%s). Reconnecting in %ds...", exc, delay)
         except OSError as exc:
             logger.warning("Birdeye WS network error (%s). Reconnecting in %ds...", exc, delay)
         except Exception as exc:
-            # Detect 403 plan-restriction specifically
             if "403" in str(exc):
-                logger.warning(
-                    "Birdeye WebSocket: HTTP 403 — WebSocket access requires a paid API plan.\n"
-                    "Live data will be served via REST polling fallback instead."
+                logger.error(
+                    "Birdeye WebSocket: HTTP 403 — verify BIRDEYE_API_KEY is set to your "
+                    "premium key. Retrying in %ds...", delay
                 )
-                delay = MAX_RECONNECT_DELAY_SECS  # back off fully, don't hammer
             else:
                 logger.warning("Birdeye WS error: %s. Reconnecting in %ds...", exc, delay)
-                delay = min(delay * 2, MAX_RECONNECT_DELAY_SECS)
+            delay = min(delay * 2, MAX_RECONNECT_DELAY_SECS)
 
         await asyncio.sleep(delay)

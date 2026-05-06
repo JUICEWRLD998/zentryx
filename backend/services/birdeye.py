@@ -204,3 +204,95 @@ async def get_token_txs(
 async def get_exit_liquidity(token_address: str) -> dict[str, Any]:
     """Endpoint 17 — /defi/v3/token/exit-liquidity"""
     return await _get("/defi/v3/token/exit-liquidity", params={"address": token_address})
+
+
+# ---------------------------------------------------------------------------
+# 3. Real-time price (premium)
+# ---------------------------------------------------------------------------
+
+async def get_token_price(token_address: str) -> dict[str, Any]:
+    """Endpoint 18 — /defi/price — real-time price for a single token."""
+    return await _get("/defi/price", params={"address": token_address})
+
+
+async def get_token_ohlcv(
+    token_address: str,
+    timeframe: str = "15m",
+    time_from: int | None = None,
+    time_to: int | None = None,
+) -> dict[str, Any]:
+    """Endpoint 19 — /defi/ohlcv — OHLCV candlestick data.
+
+    timeframe options: 1m, 3m, 5m, 15m, 30m, 1H, 2H, 4H, 6H, 8H, 12H, 1D, 3D, 1W, 1M
+    """
+    params: dict[str, Any] = {"address": token_address, "type": timeframe}
+    if time_from is not None:
+        params["time_from"] = time_from
+    if time_to is not None:
+        params["time_to"] = time_to
+    return await _get("/defi/ohlcv", params=params)
+
+
+# ---------------------------------------------------------------------------
+# 4. Discovery endpoints (premium)
+# ---------------------------------------------------------------------------
+
+async def get_trending_tokens(
+    sort_by: str = "v24hUSD",
+    sort_type: str = "desc",
+    offset: int = 0,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Endpoint 20 — /defi/tokenlist — tokens ranked by 24h volume (trending)."""
+    return await _get(
+        "/defi/tokenlist",
+        params={
+            "sort_by": sort_by,
+            "sort_type": sort_type,
+            "offset": offset,
+            "limit": limit,
+        },
+    )
+
+
+async def get_new_listings(
+    limit: int = 20,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Endpoint 21 — /defi/v2/tokens/new-listing — recently created tokens."""
+    return await _get(
+        "/defi/v2/tokens/new-listing",
+        params={"limit": limit, "offset": offset},
+    )
+
+
+async def get_token_creation_info(token_address: str) -> dict[str, Any]:
+    """Endpoint 22 — /defi/token_creation_info — token age and creator address."""
+    return await _get("/defi/token_creation_info", params={"address": token_address})
+
+
+# ---------------------------------------------------------------------------
+# 5. Wallet portfolio (premium)
+# ---------------------------------------------------------------------------
+
+async def get_wallet_portfolio(wallet: str) -> dict[str, Any]:
+    """Endpoint 23 — /v1/wallet/token_list — full current holdings for a wallet."""
+    return await _get("/v1/wallet/token_list", params={"wallet": wallet})
+
+
+# ---------------------------------------------------------------------------
+# 6. Smart money flow (premium)
+# ---------------------------------------------------------------------------
+
+async def get_smart_money_inflow_outflow(
+    token_address: str,
+    time_frame: str = "24h",
+) -> dict[str, Any]:
+    """Endpoint 24 — /smart-money/v1/token/inflow-outflow — net smart money flow.
+
+    time_frame options: 1h, 4h, 24h
+    """
+    return await _get(
+        "/smart-money/v1/token/inflow-outflow",
+        params={"address": token_address, "type": time_frame},
+    )
