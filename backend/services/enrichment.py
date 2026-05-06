@@ -15,7 +15,9 @@ import asyncio
 import hashlib
 import logging
 import random
+import time
 import uuid
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -41,6 +43,15 @@ _smart_money_lock = asyncio.Lock()
 _enrichment_locks: dict[str, asyncio.Lock] = {}
 _enrichment_locks_mutex = asyncio.Lock()
 
+# ---------------------------------------------------------------------------
+# Whale Consensus tracker
+# Tracks unique wallet addresses that BUY a given token within a 2-hour window.
+# Format: { token_address: [(wallet_address, monotonic_ts), ...] }
+# ---------------------------------------------------------------------------
+_CONSENSUS_WINDOW_S: float = 7200.0  # 2 hours
+_CONSENSUS_THRESHOLD: int = 2        # wallets needed to flag consensus
+_consensus_tracker: dict[str, list[tuple[str, float]]] = defaultdict(list)
+
 
 async def _get_enrichment_lock(token_address: str) -> asyncio.Lock:
     """Return (or lazily create) the per-token lock for enrichment fetches."""
@@ -49,6 +60,98 @@ async def _get_enrichment_lock(token_address: str) -> asyncio.Lock:
             _enrichment_locks[token_address] = asyncio.Lock()
         return _enrichment_locks[token_address]
 
+
+
+# ---------------------------------------------------------------------------
+# Whale Consensus helpers
+# ---------------------------------------------------------------------------
+
+def _consensus_update(token_address: str, wallet_address: str | None, side: str) -> int:
+    """
+    Register a BUY event from wallet_address for token_address.
+    Prunes events older than the 2-hour window, then returns the count
+    of unique wallets that have bought this token in the window.
+    Returns 0 for SELL events (consensus only tracks buys).
+    """
+    if side.upper() != "BUY" or not wallet_address:
+        return 0
+
+    now = time.monotonic()
+    entries = _consensus_tracker[token_address]
+
+    # Prune stale entries
+    cutoff = now - _CONSENSUS_WINDOW_S
+    fresh = [(w, ts) for w, ts in entries if ts >= cutoff]
+
+    # Add this wallet if not already present in the window
+    if not any(w == wallet_address for w, _ in fresh):
+        fresh.append((wallet_address, now))
+
+    _consensus_tracker[token_address] = fresh
+    return len(fresh)
+
+
+# ---------------------------------------------------------------------------
+# Copy Score (0–100)
+# ---------------------------------------------------------------------------
+
+def _compute_copy_score(
+    report: TokenMiniReport,
+    consensus_count: int,
+) -> float:
+    """
+    Compute a 0-100 Copy Score indicating how confident a trader should be
+    in copying this whale's move, based on six weighted factors.
+
+    Factor weights:
+      Security score  25 pts  — low-risk token is safe to copy
+      Smart money     20 pts  — Birdeye flagged as smart-money activity
+      Momentum        20 pts  — positive 24h price action behind the trade
+      Buy/sell ratio  15 pts  — more buyers than sellers strengthens conviction
+      Whale consensus 10 pts  — multiple whales buying same token is a signal
+      Liquidity       10 pts  — enough liquidity to enter/exit without slippage
+    """
+    score = 0.0
+
+    # 1. Security (25 pts) — linear mapping: 0 → 0 pts, 100 → 25 pts
+    if report.security_score is not None:
+        score += (report.security_score / 100.0) * 25.0
+    else:
+        score += 10.0  # neutral default when unknown
+
+    # 2. Smart money flag (20 pts — binary)
+    if report.smart_money_flag:
+        score += 20.0
+
+    # 3. Momentum (20 pts) — maps [-20%, +40%] to [0, 20] linearly
+    if report.momentum_24h is not None:
+        m = max(-20.0, min(40.0, report.momentum_24h))
+        score += ((m + 20.0) / 60.0) * 20.0
+    else:
+        score += 8.0  # neutral default
+
+    # 4. Buy/sell ratio (15 pts) — maps [0.3, 0.8] to [0, 15]
+    if report.buy_sell_ratio is not None:
+        bsr = max(0.3, min(0.8, report.buy_sell_ratio))
+        score += ((bsr - 0.3) / 0.5) * 15.0
+    else:
+        score += 6.0  # neutral default
+
+    # 5. Whale consensus (10 pts) — 1 wallet: 0 pts, 2: 7, 3+: 10
+    if consensus_count >= 3:
+        score += 10.0
+    elif consensus_count == 2:
+        score += 7.0
+
+    # 6. Liquidity (10 pts) — maps [$0, $5M] to [0, 10]
+    if report.total_liquidity_usd is not None:
+        liq = max(0.0, min(5_000_000.0, report.total_liquidity_usd))
+        score += (liq / 5_000_000.0) * 10.0
+    else:
+        score += 4.0  # neutral default
+
+    # Clamp and round
+    return round(max(0.0, min(100.0, score)), 1)
 
 
 def _apply_realistic_defaults(report: TokenMiniReport) -> TokenMiniReport:
@@ -537,6 +640,52 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
         logger.warning("Enrichment failed for %s: %s", token_address, exc)
         mini_report = TokenMiniReport(token_address=token_address)
 
+    # ── Whale Consensus ───────────────────────────────────────────────────
+    consensus_count = _consensus_update(token_address, wallet_address, side)
+    mini_report.consensus_count = consensus_count
+    if consensus_count >= _CONSENSUS_THRESHOLD:
+        logger.info(
+            "CONSENSUS: %d whales bought %s in last 2h",
+            consensus_count, mini_report.symbol or token_address[:8],
+        )
+
+    # ── Copy Score ────────────────────────────────────────────────────────
+    copy_score = _compute_copy_score(mini_report, consensus_count)
+    mini_report.copy_score = copy_score
+
+    # ── Gemini AI Analysis (non-blocking — fire in background task) ───────
+    async def _run_gemini() -> None:
+        from services.gemini import analyse_trade  # avoid circular import at module level
+        result = await analyse_trade(
+            token_symbol=mini_report.symbol or token_address[:8],
+            token_address=token_address,
+            side=side.upper(),
+            usd_value=float(usd_value or 0),
+            security_score=mini_report.security_score,
+            is_honeypot=mini_report.is_honeypot,
+            smart_money_flag=mini_report.smart_money_flag,
+            momentum_24h=mini_report.momentum_24h,
+            holder_count=mini_report.holder_count,
+            buy_sell_ratio=mini_report.buy_sell_ratio,
+            liquidity_usd=mini_report.total_liquidity_usd,
+            market_cap=mini_report.market_cap,
+            copy_score=copy_score,
+            consensus_count=consensus_count,
+        )
+        if result:
+            mini_report.ai_recommendation = result.get("recommendation")
+            mini_report.ai_analysis = result.get("analysis")
+            # Broadcast updated payload with AI fields filled in
+            await ws_manager.broadcast({
+                "type": "AI_ANALYSIS",
+                "token_address": token_address,
+                "ai_recommendation": mini_report.ai_recommendation,
+                "ai_analysis": mini_report.ai_analysis,
+                "copy_score": mini_report.copy_score,
+            })
+
+    asyncio.create_task(_run_gemini())
+
     # ── Persist trade to DB ───────────────────────────────────────────────
     wallet_id: str | None = None
     if tx_hash:
@@ -575,6 +724,8 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
         "usd_value": usd_value,
         "tx_hash": tx_hash,
         "block_time": block_time,
+        "copy_score": copy_score,
+        "consensus_count": consensus_count,
         "mini_report": mini_report.model_dump(),
     }
     await ws_manager.broadcast(broadcast_payload)

@@ -316,3 +316,9 @@ class TokenMiniReport(BaseModel):
     price: float | None = None
     market_cap: float | None = None
     volume_24h: float | None = None
+
+    # Day 2 — computed intelligence fields
+    copy_score: float | None = None              # 0–100 weighted signal quality
+    consensus_count: int = 0                     # wallets that bought same token in 2h window
+    ai_recommendation: str | None = None         # STRONG_BUY / BUY / HOLD / SELL / AVOID
+    ai_analysis: str | None = None               # 2-3 sentence Gemini analysis
