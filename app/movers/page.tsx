@@ -174,7 +174,10 @@ export default function MoversPage() {
         <nav className="hidden sm:flex items-center gap-6 font-mono text-xs text-muted-foreground">
           <Link href="/" className="hover:text-foreground transition-colors">LEADERBOARD</Link>
           <Link href="/live" className="hover:text-foreground transition-colors">LIVE FEED</Link>
-          <Link href="/movers" className="text-foreground font-semibold">MOVERS</Link>
+          <span className="text-foreground font-semibold">MOVERS</span>
+          <Link href="/heatmap" className="hover:text-foreground transition-colors">HEATMAP</Link>
+          <Link href="/trending" className="hover:text-foreground transition-colors">TRENDING</Link>
+          <Link href="/new-listings" className="hover:text-foreground transition-colors">NEW LISTINGS</Link>
         </nav>
         <ThemeToggle />
       </header>

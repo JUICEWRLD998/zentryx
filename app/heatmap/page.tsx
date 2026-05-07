@@ -80,7 +80,9 @@ export default function HeatmapPage() {
           <Link href="/" className="hover:text-foreground transition-colors">LEADERBOARD</Link>
           <Link href="/live" className="hover:text-foreground transition-colors">LIVE FEED</Link>
           <Link href="/movers" className="hover:text-foreground transition-colors">MOVERS</Link>
-          <span className="text-buy font-semibold">HEATMAP</span>
+          <span className="text-foreground font-semibold">HEATMAP</span>
+          <Link href="/trending" className="hover:text-foreground transition-colors">TRENDING</Link>
+          <Link href="/new-listings" className="hover:text-foreground transition-colors">NEW LISTINGS</Link>
         </nav>
       </header>
 

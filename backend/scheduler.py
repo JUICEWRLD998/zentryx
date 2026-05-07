@@ -14,6 +14,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from services.wallet_discovery import discover_wallets
 from services.snapshot import take_wallet_snapshots, cleanup_old_trades
+from services.signal_stats import calculate_signal_profitability
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,15 @@ scheduler.add_job(
     hour=3,
     minute=0,
     id="trade_ttl_cleanup",
+    replace_existing=True,
+)
+
+# Job 4 — Every 2 hours: recompute whale signal profitability stats
+scheduler.add_job(
+    calculate_signal_profitability,
+    trigger="interval",
+    hours=2,
+    id="signal_profitability",
     replace_existing=True,
 )
 

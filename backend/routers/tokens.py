@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
-from datetime import datetime, timezone
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
@@ -304,3 +306,206 @@ async def get_overlap() -> list[dict]:
     ]
     overlap.sort(key=lambda x: x["whale_count"], reverse=True)
     return overlap[:20]
+
+
+# ── Trending ─────────────────────────────────────────────────────────────────
+
+@router.get("/trending")
+async def get_trending() -> list[dict]:
+    """
+    Smart Money Trending — top tokens ranked by a composite smart_score:
+        smart_score = (whale_buy_count * 10) + log1p(volume_24h_usd)
+
+    Fetches top 50 by volume from Birdeye, then cross-references the
+    trade_event_table for whale BUY events in the last 48 h.
+    Degrades gracefully: when DB is unavailable, smart_buy_count = 0 and
+    ranking falls back to pure volume order.
+    """
+    try:
+        raw = await birdeye.get_trending_tokens(
+            sort_by="v24hUSD",
+            sort_type="desc",
+            offset=0,
+            limit=50,
+        )
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to fetch trending tokens: {exc}")
+
+    tokens = (raw.get("data") or {}).get("tokens") or []
+    if not tokens:
+        return []
+
+    # Cross-reference DB for smart money activity (last 48 h)
+    smart_buys: Counter[str] = Counter()
+    if db.is_available():
+        since = datetime.now(tz=timezone.utc) - timedelta(hours=48)
+        async with get_session() as session:
+            result = await session.execute(
+                select(trade_event_table.c.token_address)
+                .where(
+                    trade_event_table.c.side == "BUY",
+                    trade_event_table.c.smart_money_flag == True,  # noqa: E712
+                    trade_event_table.c.timestamp >= since,
+                )
+            )
+            smart_buys = Counter(r.token_address for r in result.fetchall())
+
+    result_list: list[dict] = []
+    for token in tokens:
+        addr = token["address"]
+        volume = token.get("v24hUSD") or 0
+        whale_count = smart_buys.get(addr, 0)
+        smart_score = round(whale_count * 10 + math.log1p(volume), 2)
+        result_list.append({
+            "address": addr,
+            "symbol": token.get("symbol") or addr[:8],
+            "name": token.get("name") or "",
+            "logo_uri": token.get("logoURI") or "",
+            "price": token.get("price") or 0,
+            "volume_24h_usd": volume,
+            "liquidity": token.get("liquidity") or 0,
+            "market_cap": token.get("mc") or 0,
+            "smart_buy_count": whale_count,
+            "smart_score": smart_score,
+        })
+
+    result_list.sort(key=lambda x: x["smart_score"], reverse=True)
+    return result_list[:20]
+
+
+# ── New Listings ─────────────────────────────────────────────────────────────
+
+async def _fetch_security(address: str) -> dict:
+    """Fetch token security data for a single token. Returns {} on failure."""
+    try:
+        raw = await birdeye.get_token_security(address)
+        return (raw.get("data") or {}) if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def _derive_risk(sec: dict) -> str:
+    """
+    Derive a simple risk label from Birdeye token_security fields.
+
+    Scoring:
+      +2  freezeable mint authority active  (critical)
+      +2  transfer fee enabled              (critical)
+      +1  mutable metadata                  (moderate)
+      +1  top-10 holders own >80% supply    (moderate)
+
+    DANGER >= 2 points | RISKY = 1 | SAFE = 0
+    """
+    if not sec:
+        return "UNKNOWN"
+    score = 0
+    if sec.get("freezeable"):
+        score += 2
+    if sec.get("transferFeeEnable"):
+        score += 2
+    if sec.get("mutableMetadata"):
+        score += 1
+    if (sec.get("top10HolderPercent") or 0) > 0.8:
+        score += 1
+    if score >= 2:
+        return "DANGER"
+    if score == 1:
+        return "RISKY"
+    return "SAFE"
+
+
+@router.get("/new-listings")
+async def get_new_listings_route() -> list[dict]:
+    """
+    Recently listed Solana tokens, enriched with security risk scoring.
+
+    Each item includes age_hours, liquidity, risk_level (SAFE/RISKY/DANGER),
+    and granular security flags for the frontend to render badges.
+    Security checks are capped at ENRICH_LIMIT=15 to stay within rate limits.
+    """
+    try:
+        raw = await birdeye.get_new_listings(limit=20, offset=0)
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to fetch new listings: {exc}")
+
+    # Response: data is {"items": [...]} or occasionally a direct list
+    data = raw.get("data") or []
+    if isinstance(data, dict):
+        items: list[dict] = data.get("items") or []
+    elif isinstance(data, list):
+        items = data
+    else:
+        items = []
+    if not items:
+        return []
+
+    now_ts = datetime.now(tz=timezone.utc).timestamp()
+
+    # Parallel security enrichment for top 15 only (rate-limit guard)
+    ENRICH_LIMIT = 15
+    enrich_addrs = [item["address"] for item in items[:ENRICH_LIMIT]]
+    security_results = await asyncio.gather(*[_fetch_security(a) for a in enrich_addrs])
+    sec_map: dict[str, dict] = dict(zip(enrich_addrs, security_results))
+
+    result: list[dict] = []
+    for item in items:
+        addr = item["address"]
+        sec = sec_map.get(addr, {})
+
+        # Parse liquidityAddedAt: "2026-05-07T07:28:05" (no tz = UTC)
+        added_str = item.get("liquidityAddedAt") or ""
+        age_hours = 0.0
+        if added_str:
+            try:
+                added_dt = datetime.fromisoformat(added_str.replace("Z", "+00:00"))
+                if added_dt.tzinfo is None:
+                    added_dt = added_dt.replace(tzinfo=timezone.utc)
+                age_hours = round((now_ts - added_dt.timestamp()) / 3600, 1)
+            except Exception:
+                age_hours = 0.0
+
+        result.append({
+            "address": addr,
+            "symbol": item.get("symbol") or addr[:8],
+            "name": item.get("name") or "",
+            "logo_uri": item.get("logoURI") or "",
+            "liquidity": item.get("liquidity") or 0,
+            "source": item.get("source") or "",
+            "age_hours": age_hours,
+            "freezeable": bool(sec.get("freezeable")),
+            "mutable_metadata": bool(sec.get("mutableMetadata")),
+            "transfer_fee": bool(sec.get("transferFeeEnable")),
+            "top10_holder_pct": round((sec.get("top10HolderPercent") or 0) * 100, 1),
+            "risk_level": _derive_risk(sec),
+        })
+
+    return result
+
+
+# ── Signal Profitability ──────────────────────────────────────────────────────
+
+@router.get("/stats/profitability")
+async def get_signal_profitability() -> dict:
+    """
+    Returns cached signal profitability stats for tracked whale BUY signals.
+    Triggers an initial compute if the cache is empty.
+    """
+    from services.signal_stats import get_cached_stats, calculate_signal_profitability
+
+    cached = get_cached_stats()
+    if cached is None:
+        if db.is_available():
+            await calculate_signal_profitability()
+        cached = get_cached_stats()
+
+    if cached is None:
+        return {
+            "computed_at": None,
+            "total_signals": 0,
+            "profitable": 0,
+            "win_rate": 0.0,
+            "avg_return_pct": 0.0,
+            "top_performers": [],
+            "message": "No data yet — DB unavailable or no signals recorded.",
+        }
+    return cached
