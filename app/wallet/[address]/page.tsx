@@ -37,7 +37,7 @@ interface PortfolioItem {
   allocation_pct: number;
 }
 
-(n: number | undefined | null): string {
+function fmt_usd(n: number | undefined | null): string {
   if (n == null) return "—";
   if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
   if (Math.abs(n) >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
@@ -300,6 +300,7 @@ function PortfolioXRay({
               <XAxis type="number" hide />
               <YAxis type="category" dataKey="symbol" tick={{ fontFamily: "JetBrains Mono, monospace", fontSize: 11, fill: "#60608A" }} width={56} />
               <Tooltip
+                cursor={{ fill: "transparent" }}
                 contentStyle={{ background: "#0A0A1A", border: "1px solid #1E1E3A", fontFamily: "JetBrains Mono, monospace", fontSize: 11 }}
                 formatter={(v: number) => [`$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, "Value"]}
               />

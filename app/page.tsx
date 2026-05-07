@@ -13,6 +13,7 @@ import {
   Bot,
   ArrowRight,
   Activity,
+  Layers,
 } from "lucide-react";
 import { NavBar } from "@/components/navbar";
 
@@ -43,7 +44,7 @@ const FEATURES = [
     icon: Activity,
     title: "Live Trade Feed",
     description:
-      "Watch whale trades hit the blockchain in real time. Every $2,000+ move surfaces instantly in the live feed.",
+      "Watch whale trades hit the blockchain in real time. Every $1,000+ move surfaces instantly — with token security score, buy/sell pressure, and smart money flags attached.",
     href: "/live",
     cta: "Open Feed →",
     accent: "text-buy",
@@ -53,7 +54,7 @@ const FEATURES = [
     icon: Eye,
     title: "Whale Profiles",
     description:
-      "Deep-dive into any tracked wallet. PnL history, win rate analysis, token exposure, and trade patterns — all in one view.",
+      "Deep-dive into any tracked wallet. Full PnL history, win rate, total trades, net worth, and a Portfolio X-Ray that breaks down current token holdings.",
     href: "/dashboard",
     cta: "View Leaderboard →",
     accent: "text-cyan",
@@ -63,21 +64,41 @@ const FEATURES = [
     icon: ShieldCheck,
     title: "Token Intelligence",
     description:
-      "Before copying a trade, check the token. Security score, honeypot detection, smart money signals, and liquidity data.",
+      "Before copying a trade, check the token. Security radial score, honeypot detection, buy/sell flow, OHLCV chart with whale buy markers, and liquidity health.",
     href: "/live",
     cta: "Explore Tokens →",
     accent: "text-yellow-400",
     border: "hover:border-yellow-400/40",
   },
   {
+    icon: BarChart3,
+    title: "Smart Money Heatmap",
+    description:
+      "See exactly which tokens smart money is accumulating or distributing across hourly windows. Spot directional bias before it shows up in price.",
+    href: "/heatmap",
+    cta: "View Heatmap →",
+    accent: "text-orange-400",
+    border: "hover:border-orange-400/40",
+  },
+  {
+    icon: Layers,
+    title: "New Listings Scanner",
+    description:
+      "Every newly launched Solana token auto-scored for security risks. Filter out honeypots, freezeable mints, transfer fees, and mutable metadata in seconds.",
+    href: "/new-listings",
+    cta: "Scan Listings →",
+    accent: "text-violet-400",
+    border: "hover:border-violet-400/40",
+  },
+  {
     icon: Bot,
     title: "Telegram Alerts",
     description:
-      "Get instant notifications when a whale moves. Use /stats, /top, /filter, and /wallet commands to query live data from anywhere.",
+      "Get instant notifications when a whale moves. Use /stats, /top, /filter, and /wallet commands to query live data from anywhere — no browser needed.",
     href: TELEGRAM_BOT_URL,
     cta: "Open Bot →",
-    accent: "text-violet-400",
-    border: "hover:border-violet-400/40",
+    accent: "text-blue-400",
+    border: "hover:border-blue-400/40",
     external: true,
   },
 ];
@@ -101,7 +122,7 @@ const HOW_IT_WORKS = [
     step: "03",
     icon: Bell,
     title: "You Copy With Confidence",
-    body: "Act on intelligence, not noise. Every alert tells you who moved, what they bought, how much, and whether the token checks out — before you follow.",
+    body: "Act on intelligence, not noise. Check token security scores, honeypot detection, and the smart money heatmap before you follow. Every alert includes who moved, what they bought, how much — and whether the token is safe to enter.",
     accent: "text-violet-400",
   },
 ];
@@ -244,8 +265,9 @@ export default function Landing() {
             </h1>
 
             <p className="text-muted-foreground text-lg sm:text-xl max-w-2xl mx-auto mb-10 leading-relaxed">
-              Zentryx is an AI-powered intelligence terminal that tracks Solana&apos;s top-performing
-              wallets in real time — and alerts you the moment they move.
+              Zentryx tracks Solana&apos;s top-performing wallets in real time. Surface live whale trades,
+              scan new token listings, read the smart money heatmap, and get Telegram alerts the
+              instant a whale moves.
             </p>
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
@@ -341,7 +363,7 @@ export default function Landing() {
               </h2>
             </div>
 
-            <div className="grid sm:grid-cols-2 gap-5">
+            <div className="grid sm:grid-cols-2 gap-5 items-stretch">
               {FEATURES.map(({ icon: Icon, title, description, href, cta, accent, border, external }, i) => (
                 <motion.div
                   key={title}
@@ -349,20 +371,21 @@ export default function Landing() {
                   whileInView={{ opacity: 1, y: 0 }}
                   viewport={{ once: true }}
                   transition={{ duration: 0.5, delay: i * 0.08 }}
+                  className="h-full"
                 >
                   {external ? (
                     <a
                       href={href}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className={`group block rounded-xl border border-border bg-card p-6 transition-colors ${border}`}
+                      className={`group flex flex-col h-full rounded-xl border border-border bg-card p-6 transition-colors ${border}`}
                     >
                       <FeatureCardContent Icon={Icon} title={title} description={description} cta={cta} accent={accent} />
                     </a>
                   ) : (
                     <Link
                       href={href}
-                      className={`group block rounded-xl border border-border bg-card p-6 transition-colors ${border}`}
+                      className={`group flex flex-col h-full rounded-xl border border-border bg-card p-6 transition-colors ${border}`}
                     >
                       <FeatureCardContent Icon={Icon} title={title} description={description} cta={cta} accent={accent} />
                     </Link>

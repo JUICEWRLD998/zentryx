@@ -143,8 +143,10 @@ export function NavBar({ activePage, showCta = false }: NavBarProps) {
                       : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
                   }`}
                 >
-                  {page === activePage && (
-                    <span className="h-1.5 w-1.5 rounded-full bg-buy shrink-0" />
+                  {page === activePage ? (
+                    <span className="h-1.5 w-1.5 rounded-full bg-buy shrink-0 animate-pulse" />
+                  ) : (
+                    <span className="h-1.5 w-1.5 shrink-0" />
                   )}
                   {label}
                 </Link>

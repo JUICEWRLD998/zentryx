@@ -34,9 +34,9 @@ function fmtUsd(n: number): string {
 }
 
 function fmtAge(hours: number): string {
-  if (hours < 1) return `${Math.round(hours * 60)}m ago`;
-  if (hours < 24) return `${hours.toFixed(1)}h ago`;
-  return `${(hours / 24).toFixed(1)}d ago`;
+  if (hours < 1) return `${Math.round(hours * 60)}m`;
+  if (hours < 24) return `${hours.toFixed(1)}h`;
+  return `${(hours / 24).toFixed(1)}d`;
 }
 
 function RiskBadge({ level }: { level: RiskLevel }) {
@@ -92,19 +92,13 @@ function ListingRow({ token, rank }: { token: NewListing; rank: number }) {
       </div>
 
       {/* Age */}
-      <div className="text-right shrink-0 hidden sm:block">
-        <p className="font-mono text-xs text-foreground">{fmtAge(token.age_hours)}</p>
-        <p className="font-mono text-xs text-muted-foreground">AGE</p>
-      </div>
+      <span className="font-mono text-xs text-foreground shrink-0 hidden sm:inline text-right w-16">{fmtAge(token.age_hours)}</span>
 
       {/* Liquidity */}
-      <div className="text-right shrink-0 hidden sm:block">
-        <p className="font-mono text-xs text-foreground">{fmtUsd(token.liquidity)}</p>
-        <p className="font-mono text-xs text-muted-foreground">LIQUIDITY</p>
-      </div>
+      <span className="font-mono text-xs text-foreground shrink-0 hidden sm:inline text-right w-24">{fmtUsd(token.liquidity)}</span>
 
       {/* Flags */}
-      <div className="hidden md:flex items-center gap-1 shrink-0">
+      <div className="hidden md:flex items-center gap-1 shrink-0 w-28">
         {token.freezeable && (
           <span title="Freezeable mint" className="rounded bg-sell/10 border border-sell/20 px-1.5 py-0.5 font-mono text-xs text-sell">
             FREEZE
@@ -249,6 +243,17 @@ export default function NewListingsPage() {
           </div>
         ) : (
           <div className="flex flex-col gap-2">
+            {/* Column headers */}
+            <div className="hidden sm:flex items-center gap-3 px-4 pb-2 font-mono text-[10px] text-muted-foreground tracking-widest border-b border-border/50">
+              <span className="w-5 shrink-0" />
+              <span className="w-7 shrink-0" />
+              <span className="flex-1">TOKEN</span>
+              <span className="text-right w-16 shrink-0">AGE</span>
+              <span className="text-right w-24 shrink-0">LIQUIDITY</span>
+              <span className="hidden md:block w-28 shrink-0" />
+              <span className="w-20 shrink-0 text-right">SCORE</span>
+              <span className="w-3 shrink-0" />
+            </div>
             {data.map((token, i) => (
               <ListingRow key={`${token.address}-${i}`} token={token} rank={i + 1} />
             ))}

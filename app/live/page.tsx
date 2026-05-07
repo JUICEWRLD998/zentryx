@@ -152,6 +152,8 @@ function TokenModal({
     const embedded = event.mini_report;
     const isUsable =
       embedded &&
+      embedded.total_liquidity_usd != null &&
+      embedded.holder_count != null &&
       (embedded.security_score != null || embedded.symbol != null || embedded.price != null);
     if (isUsable) { setReport(embedded); return; }
     setLoading(true);
@@ -385,7 +387,7 @@ export default function LivePage() {
           {events.length === 0 ? (
             <div className="rounded-lg border border-border bg-card p-10 text-center font-mono text-sm text-muted-foreground">
               {status === "connected"
-                ? "Waiting for large trades ($2K+ on SOL, USDC, BONK, WIF, JUP, PYTH)..."
+                ? "Waiting for $1K+ trades from tracked wallets..."
                 : "Connecting to live feed..."}
             </div>
           ) : (
