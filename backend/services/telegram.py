@@ -46,7 +46,15 @@ def _get_bot() -> Bot | None:
 
 
 def _chat_id() -> str:
+    """Personal user chat ID — used for bot command replies and watchlist DMs."""
     return os.getenv("TELEGRAM_CHAT_ID", "")
+
+
+def _group_chat_id() -> str:
+    """Shared group/channel ID — used for public signal alerts and daily briefing.
+    Falls back to TELEGRAM_CHAT_ID if TELEGRAM_GROUP_CHAT_ID is not set.
+    """
+    return os.getenv("TELEGRAM_GROUP_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID", "")
 
 
 async def _db_find_wallet_by_address(address: str):
@@ -96,9 +104,9 @@ async def send_trade_alert(
     copy_score: float | None = None,
     consensus_count: int = 0,
 ) -> None:
-    """Send a formatted trade alert to the configured Telegram chat."""
+    """Send a formatted trade alert to the group/channel."""
     bot = _get_bot()
-    chat_id = _chat_id()
+    chat_id = _group_chat_id()
 
     if not bot or not chat_id:
         logger.debug("Telegram not configured — skipping alert.")
@@ -223,9 +231,9 @@ async def send_trade_alert_ai_followup(
     recommendation: str,
     analysis: str,
 ) -> None:
-    """Send a follow-up AI verdict message to the channel after the initial alert."""
+    """Send a follow-up AI verdict message to the group/channel after the initial alert."""
     bot = _get_bot()
-    chat_id = _chat_id()
+    chat_id = _group_chat_id()
     if not bot or not chat_id:
         return
 
@@ -258,9 +266,9 @@ async def send_trade_alert_ai_followup(
 
 
 async def send_startup_message() -> None:
-    """Send a startup notification so you know the bot is alive."""
+    """Send a startup notification to the group so you know the bot is alive."""
     bot = _get_bot()
-    chat_id = _chat_id()
+    chat_id = _group_chat_id()
     if not bot or not chat_id:
         return
     try:
@@ -354,7 +362,7 @@ async def send_daily_briefing() -> None:
     AI section is included if Groq is available; omitted gracefully if not.
     """
     bot = _get_bot()
-    chat_id = _chat_id()
+    chat_id = _group_chat_id()
     if not bot or not chat_id:
         logger.debug("Telegram not configured — skipping daily briefing.")
         return
