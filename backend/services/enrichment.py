@@ -91,6 +91,22 @@ def _consensus_update(token_address: str, wallet_address: str | None, side: str)
     return len(fresh)
 
 
+def get_live_consensus(token_address: str) -> int:
+    """
+    Read-only query of the in-memory consensus tracker.
+    Returns the count of unique wallets that bought this token
+    within the 2-hour window, without recording a new event.
+    """
+    now = time.monotonic()
+    entries = _consensus_tracker.get(token_address, [])
+    cutoff = now - _CONSENSUS_WINDOW_S
+    fresh = [(w, ts) for w, ts in entries if ts >= cutoff]
+    # Update the tracker with pruned entries (maintenance only, no new write)
+    if fresh != entries:
+        _consensus_tracker[token_address] = fresh
+    return len(fresh)
+
+
 # ---------------------------------------------------------------------------
 # Copy Score (0–100)
 # ---------------------------------------------------------------------------
@@ -656,6 +672,7 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
     # ── Gemini AI Analysis (non-blocking — fire in background task) ───────
     async def _run_gemini() -> None:
         from services.gemini import analyse_trade  # avoid circular import at module level
+        from services.telegram import send_trade_alert_ai_followup
         result = await analyse_trade(
             token_symbol=mini_report.symbol or token_address[:8],
             token_address=token_address,
@@ -683,6 +700,14 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
                 "ai_analysis": mini_report.ai_analysis,
                 "copy_score": mini_report.copy_score,
             })
+            # Send follow-up AI verdict to Telegram channel
+            if mini_report.ai_recommendation and mini_report.ai_analysis:
+                await send_trade_alert_ai_followup(
+                    token_symbol=mini_report.symbol or token_address[:8],
+                    token_address=token_address,
+                    recommendation=mini_report.ai_recommendation,
+                    analysis=mini_report.ai_analysis,
+                )
 
     asyncio.create_task(_run_gemini())
 
@@ -742,6 +767,8 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
             security_score=mini_report.security_score,
             smart_money=mini_report.smart_money_flag,
             momentum_24h=mini_report.momentum_24h,
+            copy_score=copy_score,
+            consensus_count=consensus_count,
         )
     )
 

@@ -93,6 +93,8 @@ async def send_trade_alert(
     security_score: float | None,
     smart_money: bool,
     momentum_24h: float | None,
+    copy_score: float | None = None,
+    consensus_count: int = 0,
 ) -> None:
     """Send a formatted trade alert to the configured Telegram chat."""
     bot = _get_bot()
@@ -115,15 +117,35 @@ async def send_trade_alert(
         f"{'Safe' if (security_score or 0) >= 70 else 'Caution' if (security_score or 0) >= 40 else 'Risky'}"
         + (f" ({security_score:.0f}/100)" if security_score is not None else "")
     )
+
+    # Consensus badge (prepended if 2+ whales bought same token in 2h window)
+    if consensus_count >= 4:
+        consensus_str = "🔥 <b>EXTREME CONSENSUS</b> (4+ whales)\n"
+    elif consensus_count == 3:
+        consensus_str = "⚡ <b>HIGH CONSENSUS</b> (3 whales)\n"
+    elif consensus_count == 2:
+        consensus_str = "💡 <b>MODERATE CONSENSUS</b> (2 whales)\n"
+    else:
+        consensus_str = ""
+
+    # Copy score badge
+    if copy_score is not None:
+        cs_emoji = "🟢" if copy_score >= 70 else ("🟡" if copy_score >= 50 else "🔴")
+        cs_str = f"\n{cs_emoji} Copy Score: <b>{copy_score:.0f}/100</b>"
+    else:
+        cs_str = ""
+
     text = (
         f"{side_emoji} <b>Zentryx Signal</b>\n"
         f"\n"
+        f"{consensus_str}"
         f"<b>{wallet_label}</b> {side} <a href='{token_url}'>${token_symbol}</a>\n"
         f"Value: <b>{usd_str}</b>\n"
         f"\n"
         f"Security: {sec_str}\n"
         f"Smart Money: {'✅ Yes' if smart_money else '—'}\n"
-        f"Momentum: {momentum_str} (24h)\n"
+        f"Momentum: {momentum_str} (24h)"
+        f"{cs_str}\n"
         f"\n"
         f"<a href='{solscan_url}'>View wallet on Solscan</a>"
     )
@@ -194,6 +216,47 @@ async def send_personal_trade_alert(
         logger.debug("Personal alert to user %s failed: %s", telegram_user_id, exc)
 
 
+async def send_trade_alert_ai_followup(
+    *,
+    token_symbol: str,
+    token_address: str,
+    recommendation: str,
+    analysis: str,
+) -> None:
+    """Send a follow-up AI verdict message to the channel after the initial alert."""
+    bot = _get_bot()
+    chat_id = _chat_id()
+    if not bot or not chat_id:
+        return
+
+    rec_emoji = {
+        "STRONG_BUY": "🟢",
+        "BUY": "🟩",
+        "HOLD": "🟡",
+        "SELL": "🟠",
+        "AVOID": "🔴",
+    }.get(recommendation, "⬜")
+    rec_label = recommendation.replace("_", " ")
+    token_url = f"https://birdeye.so/token/{token_address}?chain=solana"
+
+    text = (
+        f"🤖 <b>AI Verdict — <a href='{token_url}'>${token_symbol}</a></b>\n"
+        f"{rec_emoji} <b>{rec_label}</b>\n\n"
+        f"{analysis}"
+    )
+
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        logger.info("AI followup sent for $%s: %s", token_symbol, recommendation)
+    except TelegramError as exc:
+        logger.debug("AI followup send failed: %s", exc)
+
+
 async def send_startup_message() -> None:
     """Send a startup notification so you know the bot is alive."""
     bot = _get_bot()
@@ -250,9 +313,13 @@ async def _handle_start(bot: Bot, update: Update) -> None:
         "/watch [address] — add a whale to your personal watchlist\n"
         "/unwatch [address] — remove from your watchlist\n"
         "/my-wallets — view your personal watchlist\n"
+        "/signal [token] — copy score + factor breakdown (fast)\n"
+        "/analyze [token] — AI deep-dive analysis via Groq\n"
+        "/track [token] [tp%] [sl%] — open a paper trade\n"
+        "/my-trades — view your paper trade positions\n"
         "/help — show this message\n\n"
-        "Trade alerts appear here automatically when whales move $2,000+.\n"
-        "Watchlist alerts are sent directly to you as DMs."
+        "🔔 Trade alerts fire automatically when whales move $1,000+.\n"
+        "📩 Watchlist alerts are DM'd directly to you."
     )
     await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
     logger.info("Responded to /start from chat %s (%s)", chat_id, name)
@@ -472,8 +539,11 @@ async def _handle_help(bot: Bot, update: Update) -> None:
         "/alert [token] [price] [above|below] — set a price alert\n"
         "/my-alerts — view your active price alerts\n"
         "/cancel-alert [id] — cancel a price alert\n"
+        "/signal [token] — copy score + per-factor breakdown (fast, no AI)\n"
+        "/analyze [token] — full AI narrative analysis via Groq (~20s)\n"
+        "/close-trade [id] — manually close an open paper trade\n"
         "/help — show this message\n\n"
-        "🔔 Trade alerts are sent automatically when a tracked whale makes a $2,000+ trade.\n"
+        "🔔 Trade alerts fire automatically when whales move $1,000+.\n"
         "📩 Watchlist alerts are DM'd directly to you for wallets you /watch."
     )
     await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
@@ -676,7 +746,7 @@ async def _handle_my_wallets(bot: Bot, update: Update) -> None:
         text="\n\n".join(lines),
         parse_mode="HTML",
     )
-    logger.info("Responded to /my-wallets from user %s — %d items.", telegram_user_id, len(items))
+    logger.info("Responded to /my-wallets from user %s — %d items.", telegram_user_id, len(rows))
 
 
 async def _handle_track(bot: Bot, update: Update) -> None:
@@ -1004,8 +1074,267 @@ async def _handle_test_alert(bot: Bot, update: Update) -> None:
         security_score=72.0,
         smart_money=True,
         momentum_24h=8.5,
+        copy_score=78.0,
+        consensus_count=2,
     )
     logger.info("Test alert triggered by chat %s", chat_id)
+
+
+async def _handle_signal(bot: Bot, update: Update) -> None:
+    """/signal <token_address> — show copy score + per-factor breakdown."""
+    chat_id = update.message.chat.id
+    parts = (update.message.text or "").strip().split()
+
+    if len(parts) < 2:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "ℹ️ Usage: <code>/signal [token_address]</code>\n"
+                "Returns a structured copy score breakdown.\n"
+                "Example: <code>/signal DezXAZ8z7Pnr</code>"
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    token_address = parts[1]
+    thinking_msg = await bot.send_message(
+        chat_id=chat_id,
+        text=f"🔍 Fetching signal data for <code>{token_address[:16]}...</code>",
+        parse_mode="HTML",
+    )
+
+    try:
+        from services.enrichment import build_mini_report, _compute_copy_score, get_live_consensus
+        report = await build_mini_report(token_address)
+        cons_count = get_live_consensus(token_address)
+        copy_score = _compute_copy_score(report, cons_count)
+
+        symbol = report.symbol or token_address[:8]
+        sec_str = f"{report.security_score:.0f}/100" if report.security_score is not None else "N/A"
+        sm_str = "✅ Yes" if report.smart_money_flag else "No"
+        mom_str = f"{report.momentum_24h:+.1f}%" if report.momentum_24h is not None else "N/A"
+        liq_str = f"${report.total_liquidity_usd:,.0f}" if report.total_liquidity_usd is not None else "N/A"
+        bsr_str = f"{report.buy_sell_ratio:.2f}" if report.buy_sell_ratio is not None else "N/A"
+
+        # Verdict
+        if copy_score >= 70:
+            verdict = "✅ <b>COPY</b>"
+        elif copy_score >= 50:
+            verdict = "👀 <b>WATCH</b>"
+        else:
+            verdict = "🚫 <b>SKIP</b>"
+
+        cs_emoji = "🟢" if copy_score >= 70 else ("🟡" if copy_score >= 50 else "🔴")
+        token_url = f"https://birdeye.so/token/{token_address}?chain=solana"
+
+        text = (
+            f"📊 <b>Signal Report — <a href='{token_url}'>${symbol}</a></b>\n"
+            f"\n"
+            f"{cs_emoji} Copy Score: <b>{copy_score:.0f}/100</b>  →  {verdict}\n"
+            f"\n"
+            f"<b>Factor Breakdown:</b>\n"
+            f"🔒 Security:      {sec_str} (25pts)\n"
+            f"🧠 Smart Money:   {sm_str} (20pts)\n"
+            f"📈 Momentum 24h:  {mom_str} (20pts)\n"
+            f"📊 Buy/Sell Ratio:{bsr_str} (15pts)\n"
+            f"💧 Liquidity:     {liq_str} (10pts)\n"
+            f"🐋 Consensus:     {cons_count} whale(s) (10pts)\n"
+        )
+
+        if cons_count >= 2:
+            text += f"\n💡 <b>{cons_count} whales bought this token in the last 2h</b>"
+
+        await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as exc:
+        await bot.send_message(chat_id=chat_id, text=f"❌ Failed to fetch signal data: {exc}", parse_mode="HTML")
+    finally:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=thinking_msg.message_id)
+        except Exception:
+            pass
+
+    logger.info("Responded to /signal for %s from chat %s", token_address[:8], chat_id)
+
+
+async def _handle_analyze(bot: Bot, update: Update) -> None:
+    """/analyze <token_address> — full Groq AI analysis."""
+    chat_id = update.message.chat.id
+    parts = (update.message.text or "").strip().split()
+
+    if len(parts) < 2:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "ℹ️ Usage: <code>/analyze [token_address]</code>\n"
+                "Returns a full AI narrative analysis (takes ~20s).\n"
+                "Example: <code>/analyze DezXAZ8z7Pnr</code>"
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    token_address = parts[1]
+    thinking_msg = await bot.send_message(
+        chat_id=chat_id,
+        text=f"🤖 <b>AI is analysing <code>{token_address[:16]}...</code></b>\nThis takes ~20 seconds...",
+        parse_mode="HTML",
+    )
+
+    try:
+        from services.enrichment import build_mini_report, _compute_copy_score, get_live_consensus
+        from services.gemini import analyse_trade
+
+        report = await build_mini_report(token_address)
+        cons_count = get_live_consensus(token_address)
+        copy_score = _compute_copy_score(report, cons_count)
+        symbol = report.symbol or token_address[:8]
+
+        result = await analyse_trade(
+            token_symbol=symbol,
+            token_address=token_address,
+            side="BUY",
+            usd_value=0.0,
+            security_score=report.security_score,
+            is_honeypot=report.is_honeypot,
+            smart_money_flag=report.smart_money_flag,
+            momentum_24h=report.momentum_24h,
+            holder_count=report.holder_count,
+            buy_sell_ratio=report.buy_sell_ratio,
+            liquidity_usd=report.total_liquidity_usd,
+            market_cap=report.market_cap,
+            copy_score=copy_score,
+            consensus_count=cons_count,
+        )
+
+        token_url = f"https://birdeye.so/token/{token_address}?chain=solana"
+
+        if result:
+            rec = result.get("recommendation", "HOLD")
+            analysis = result.get("analysis", "")
+            rec_emoji = {"STRONG_BUY": "🟢", "BUY": "🟩", "HOLD": "🟡", "SELL": "🟠", "AVOID": "🔴"}.get(rec, "⬜")
+            rec_label = rec.replace("_", " ")
+            text = (
+                f"🤖 <b>AI Analysis — <a href='{token_url}'>${symbol}</a></b>\n"
+                f"{rec_emoji} <b>{rec_label}</b>  |  Copy Score: {copy_score:.0f}/100\n\n"
+                f"{analysis}"
+            )
+        else:
+            text = (
+                f"⚠️ <b>AI Analysis — <a href='{token_url}'>${symbol}</a></b>\n"
+                f"Copy Score: {copy_score:.0f}/100\n\n"
+                f"AI analysis unavailable right now (Groq quota or timeout). "
+                f"Use /signal for a structured data-only breakdown."
+            )
+
+        await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as exc:
+        await bot.send_message(chat_id=chat_id, text=f"❌ Analysis failed: {exc}", parse_mode="HTML")
+    finally:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=thinking_msg.message_id)
+        except Exception:
+            pass
+
+    logger.info("Responded to /analyze for %s from chat %s", token_address[:8], chat_id)
+
+
+async def _handle_close_trade(bot: Bot, update: Update) -> None:
+    """/close-trade <id> — manually close an open paper trade at current price."""
+    chat_id = update.message.chat.id
+    telegram_user_id = update.message.from_user.id
+    parts = (update.message.text or "").strip().split()
+
+    if len(parts) < 2:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "ℹ️ Usage: <code>/close-trade [id]</code>\n"
+                "Find trade IDs with /my-trades."
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    short_id = parts[1].lower()
+
+    import db
+    if not db.is_available():
+        await bot.send_message(chat_id=chat_id, text="⚠️ Database not available.", parse_mode="HTML")
+        return
+
+    from sqlalchemy import func, update as sa_update
+    from db import paper_trade_table, get_session
+    from datetime import datetime, timezone
+
+    # Find the trade by short ID prefix, scoped to this user
+    async with get_session() as session:
+        result = await session.execute(
+            select(paper_trade_table).where(
+                paper_trade_table.c.telegram_user_id == telegram_user_id,
+                paper_trade_table.c.status == "open",
+                func.lower(paper_trade_table.c.id).like(short_id + "%"),
+            )
+        )
+        trade = result.fetchone()
+
+    if not trade:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"❌ No open trade found matching <code>{short_id}</code>.\nUse /my-trades to see your open positions.",
+            parse_mode="HTML",
+        )
+        return
+
+    # Fetch current price
+    try:
+        from services import birdeye
+        raw = await birdeye.get_token_price(trade.token_address)
+        current_price = float((raw.get("data") or {}).get("value") or 0)
+    except Exception:
+        current_price = None
+
+    if not current_price:
+        await bot.send_message(
+            chat_id=chat_id,
+            text="❌ Could not fetch current price. Try again in a moment.",
+            parse_mode="HTML",
+        )
+        return
+
+    entry = trade.entry_price
+    pnl_pct = round(((current_price - entry) / entry) * 100, 2)
+    if trade.side == "SELL":
+        pnl_pct = -pnl_pct
+
+    now = datetime.now(tz=timezone.utc)
+    async with get_session() as session:
+        await session.execute(
+            sa_update(paper_trade_table)
+            .where(paper_trade_table.c.id == trade.id)
+            .values(
+                status="closed",
+                exit_price=current_price,
+                exit_time=now,
+                pnl_pct=pnl_pct,
+                close_reason="manual",
+            )
+        )
+
+    sign = "+" if pnl_pct >= 0 else ""
+    symbol = trade.symbol or trade.token_address[:8]
+    await bot.send_message(
+        chat_id=chat_id,
+        text=(
+            f"⚪ <b>Trade closed — ${symbol}</b>\n\n"
+            f"Side: {trade.side}\n"
+            f"Entry: ${entry:.6g}  →  Exit: ${current_price:.6g}\n"
+            f"P&L: <b>{sign}{pnl_pct:.2f}%</b>  (manual close)\n\n"
+            f"Use /my-trades to see your full history."
+        ),
+        parse_mode="HTML",
+    )
+    logger.info("User %s manually closed trade %s on %s P&L=%.2f%%", telegram_user_id, trade.id[:8], symbol, pnl_pct)
 
 
 async def _dispatch(bot: Bot, update: Update) -> None:
@@ -1056,6 +1385,12 @@ async def _dispatch(bot: Bot, update: Update) -> None:
         await _handle_cancel_alert(bot, update)
     elif text.startswith("/test_alert") or text == "/test_alert":
         await _handle_test_alert(bot, update)
+    elif text.startswith("/signal ") or text == "/signal":
+        await _handle_signal(bot, update)
+    elif text.startswith("/analyze ") or text == "/analyze":
+        await _handle_analyze(bot, update)
+    elif text.startswith("/close-trade ") or text == "/close-trade":
+        await _handle_close_trade(bot, update)
     # Unknown commands silently ignored
 
 
@@ -1070,7 +1405,7 @@ async def run_bot_command_loop() -> None:
         logger.warning("Telegram bot token not set — command loop disabled.")
         return
 
-    logger.info("Telegram command loop started — listening for /start, /wallets, /stats, /top, /wallet, /filter, /watch, /unwatch, /my-wallets, /track, /my-trades, /alert, /my-alerts, /cancel-alert, /help")
+    logger.info("Telegram command loop started — listening for /start, /wallets, /stats, /top, /wallet, /filter, /watch, /unwatch, /my-wallets, /track, /my-trades, /alert, /my-alerts, /cancel-alert, /signal, /analyze, /close-trade, /help")
     offset: int | None = None
 
     while True:
