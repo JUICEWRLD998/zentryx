@@ -200,8 +200,8 @@ export default function TradesPage() {
     try {
       const res = await fetch(`${API_BASE}/api/trades`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: PaperTrade[] = await res.json();
-      setTrades(data);
+      const data = await res.json();
+      setTrades(Array.isArray(data) ? data : (data.trades ?? []));
       setError(null);
     } catch (e) {
       setError((e as Error).message);
