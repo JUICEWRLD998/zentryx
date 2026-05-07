@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
+import { NavBar } from "@/components/navbar";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -114,23 +115,7 @@ export default function WalletPage() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Nav */}
-      <header className="border-b border-border px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <span className="h-2 w-2 rounded-full bg-buy animate-pulse" />
-          <Link href="/" className="font-mono text-sm font-semibold tracking-widest text-foreground hover:text-buy transition-colors">
-            ZENTRYX
-          </Link>
-        </div>
-        <nav className="hidden sm:flex items-center gap-6 font-mono text-xs text-muted-foreground">
-          <Link href="/" className="hover:text-foreground transition-colors">LEADERBOARD</Link>
-          <Link href="/live" className="hover:text-foreground transition-colors">LIVE FEED</Link>
-          <Link href="/movers" className="hover:text-foreground transition-colors">MOVERS</Link>
-          <Link href="/heatmap" className="hover:text-foreground transition-colors">HEATMAP</Link>
-          <Link href="/trending" className="hover:text-foreground transition-colors">TRENDING</Link>
-          <Link href="/new-listings" className="hover:text-foreground transition-colors">NEW LISTINGS</Link>
-        </nav>
-      </header>
+      <NavBar />
 
       <main className="flex-1 px-4 sm:px-6 py-8 max-w-5xl mx-auto w-full">
         {/* Breadcrumb */}

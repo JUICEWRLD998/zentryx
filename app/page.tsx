@@ -14,7 +14,7 @@ import {
   ArrowRight,
   Activity,
 } from "lucide-react";
-import { ThemeToggle } from "@/components/theme-toggle";
+import { NavBar } from "@/components/navbar";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const TELEGRAM_BOT_URL = "https://t.me/zentryxtrade_bot";
@@ -24,6 +24,13 @@ interface Stats {
   totalPnl: number;
   bestWinRate: number;
 }
+
+type TickerItem = {
+  address: string;
+  symbol: string;
+  price: number;
+  price_change_24h: number;
+};
 
 function fmt_usd(n: number): string {
   if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
@@ -123,6 +130,19 @@ function StatCard({
 export default function Landing() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [ticker, setTicker] = useState<TickerItem[]>([]);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/movers`)
+      .then((r) => r.json())
+      .then((d: { gainers?: TickerItem[]; losers?: TickerItem[] }) => {
+        const items = [...(d.gainers ?? []), ...(d.losers ?? [])].filter(
+          (t) => t.price_change_24h != null
+        );
+        if (items.length > 0) setTicker(items);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/wallets`)
@@ -144,40 +164,56 @@ export default function Landing() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      {/* ── Nav ── */}
-      <header className="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <span className="h-2 w-2 rounded-full bg-buy animate-pulse" />
-          <span className="font-mono text-sm font-semibold tracking-widest text-foreground">
-            ZENTRYX
-          </span>
+      <NavBar showCta />
+
+      {/* ── Price Ticker — directly under nav ── */}
+      {ticker.length > 0 && (
+        <div className="relative z-40 border-b border-border/50 bg-card/50 backdrop-blur-sm overflow-hidden" style={{ height: "36px" }}>
+          {/* LIVE badge */}
+          <div className="absolute left-0 top-0 bottom-0 z-20 flex items-center gap-2 pl-4 pr-3 border-r border-border/50 bg-card/80 backdrop-blur-sm">
+            <span className="h-1.5 w-1.5 rounded-full bg-buy animate-pulse shrink-0" />
+            <span className="font-mono text-[10px] font-bold tracking-widest text-buy whitespace-nowrap">LIVE</span>
+          </div>
+
+          {/* Left fade */}
+          <div aria-hidden className="absolute left-18 top-0 bottom-0 w-10 z-10 pointer-events-none bg-linear-to-r from-card/50 to-transparent" />
+          {/* Right fade */}
+          <div aria-hidden className="absolute right-0 top-0 bottom-0 w-16 z-10 pointer-events-none bg-linear-to-l from-card/50 to-transparent" />
+
+          {/* Scrolling strip */}
+          <div className="absolute inset-0 flex items-center" style={{ paddingLeft: "88px" }}>
+            <div className="ticker-track">
+              {[...ticker, ...ticker].map((item, idx) => (
+                <span
+                  key={`${item.address}-tk-${idx}`}
+                  className="inline-flex items-center gap-2 font-mono whitespace-nowrap shrink-0"
+                  style={{ padding: "0 20px" }}
+                >
+                  <span className="text-[11px] font-semibold text-foreground tracking-wide">
+                    ${item.symbol}
+                  </span>
+                  <span className="text-[11px] tabular-nums text-muted-foreground">
+                    {item.price < 0.001
+                      ? item.price.toFixed(6)
+                      : item.price < 1
+                      ? item.price.toFixed(4)
+                      : item.price.toFixed(2)}
+                  </span>
+                  <span
+                    className={`text-[11px] font-semibold tabular-nums ${
+                      item.price_change_24h >= 0 ? "text-buy" : "text-sell"
+                    }`}
+                  >
+                    {item.price_change_24h >= 0 ? "▲" : "▼"}&nbsp;
+                    {Math.abs(item.price_change_24h).toFixed(2)}%
+                  </span>
+                  <span aria-hidden className="text-border/50 text-[10px]" style={{ paddingLeft: "4px" }}>│</span>
+                </span>
+              ))}
+            </div>
+          </div>
         </div>
-        <nav className="hidden md:flex items-center gap-6 font-mono text-xs text-muted-foreground">
-          <Link href="/dashboard" className="hover:text-foreground transition-colors">DASHBOARD</Link>
-          <Link href="/live" className="hover:text-foreground transition-colors">LIVE FEED</Link>
-          <Link href="/movers" className="hover:text-foreground transition-colors">MOVERS</Link>
-          <Link href="/heatmap" className="hover:text-foreground transition-colors">HEATMAP</Link>
-          <Link href="/trending" className="hover:text-foreground transition-colors">TRENDING</Link>
-          <Link href="/new-listings" className="hover:text-foreground transition-colors">NEW LISTINGS</Link>
-          <a
-            href={TELEGRAM_BOT_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hover:text-foreground transition-colors"
-          >
-            BOT
-          </a>
-        </nav>
-        <div className="flex items-center gap-3">
-          <ThemeToggle />
-          <Link
-            href="/dashboard"
-            className="hidden sm:inline-flex items-center gap-1.5 rounded-md bg-buy text-primary-foreground font-mono text-xs font-semibold px-3 py-1.5 hover:opacity-90 transition-opacity"
-          >
-            OPEN APP <ArrowRight size={11} />
-          </Link>
-        </div>
-      </header>
+      )}
 
       <main className="flex-1">
         {/* ── Hero ── */}
