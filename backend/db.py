@@ -161,6 +161,18 @@ price_alert_table = Table(
     Column("status", String, nullable=False),         # active / triggered / cancelled
 )
 
+signal_outcome_table = Table(
+    "signal_outcome", metadata,
+    Column("id", String, primary_key=True),
+    Column("token_address", String, unique=True, nullable=False),  # upsert key
+    Column("symbol", String, nullable=True),
+    Column("entry_usd", Float, nullable=False),
+    Column("entry_time", DateTime(timezone=True), nullable=False),
+    Column("check_time", DateTime(timezone=True), nullable=False),
+    Column("current_price", Float, nullable=False),
+    Column("return_pct", Float, nullable=False),
+)
+
 
 async def connect() -> None:
     """Initialize async engine and create all tables if they don't exist."""

@@ -545,6 +545,16 @@ async def _handle_stats(bot: Bot, update: Update) -> None:
         f"⭐ Highest win rate: <b>{top_win.label}</b> ({top_win.win_rate * 100:.0f}%)\n\n"
         "Use /wallets for full list or /top for ranked view."
     )
+
+    from services.signal_stats import get_cached_stats
+    stats = get_cached_stats()
+    if stats and stats.get("total_signals", 0) > 0:
+        text += (
+            f"\n\n📈 <b>Signal Accuracy</b>\n"
+            f"{stats['win_rate']:.1f}% of smart money BUYs profitable\n"
+            f"Avg return: {stats['avg_return_pct']:+.1f}% ({stats['total_signals']} signals)"
+        )
+
     await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML")
     logger.info("Responded to /stats from chat %s", chat_id)
 

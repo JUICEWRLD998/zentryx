@@ -161,3 +161,42 @@ async def calculate_signal_profitability() -> None:
         _cache["win_rate"],
         _cache["avg_return_pct"],
     )
+
+    # Persist results to DB so history survives backend restarts
+    if performers:
+        try:
+            import uuid as _uuid
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
+            from db import signal_outcome_table, get_session
+
+            now = datetime.now(tz=timezone.utc)
+            rows_to_upsert = [
+                {
+                    "id": str(_uuid.uuid4()),
+                    "token_address": p["address"],
+                    "symbol": p.get("symbol"),
+                    "entry_usd": p["entry_usd"],
+                    "entry_time": entry_by_token[p["address"]]["timestamp"],
+                    "check_time": now,
+                    "current_price": p["current_price"],
+                    "return_pct": p["return_pct"],
+                }
+                for p in performers
+            ]
+            async with get_session() as session:
+                stmt = pg_insert(signal_outcome_table).values(rows_to_upsert)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["token_address"],
+                    set_={
+                        "symbol": stmt.excluded.symbol,
+                        "entry_usd": stmt.excluded.entry_usd,
+                        "entry_time": stmt.excluded.entry_time,
+                        "check_time": stmt.excluded.check_time,
+                        "current_price": stmt.excluded.current_price,
+                        "return_pct": stmt.excluded.return_pct,
+                    },
+                )
+                await session.execute(stmt)
+            logger.info("signal_stats: upserted %d rows to signal_outcome", len(rows_to_upsert))
+        except Exception as exc:
+            logger.warning("signal_stats: DB upsert failed (non-fatal): %s", exc)
