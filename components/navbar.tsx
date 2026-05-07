@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useState } from "react";
 import { Menu, X, ArrowRight } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -19,15 +20,14 @@ type NavPage =
   | "heatmap"
   | "trending"
   | "new-listings"
-  | "dashboard"
   | undefined;
 
 const NAV_LINKS: { label: string; href: string; page: NavPage }[] = [
-  { label: "LEADERBOARD", href: "/", page: "leaderboard" },
-  { label: "LIVE FEED",   href: "/live", page: "live" },
-  { label: "MOVERS",      href: "/movers", page: "movers" },
-  { label: "HEATMAP",     href: "/heatmap", page: "heatmap" },
-  { label: "TRENDING",    href: "/trending", page: "trending" },
+  { label: "LEADERBOARD", href: "/dashboard", page: "leaderboard" },
+  { label: "LIVE FEED",   href: "/live",      page: "live" },
+  { label: "MOVERS",      href: "/movers",    page: "movers" },
+  { label: "HEATMAP",     href: "/heatmap",   page: "heatmap" },
+  { label: "TRENDING",    href: "/trending",  page: "trending" },
   { label: "NEW LISTINGS", href: "/new-listings", page: "new-listings" },
 ];
 
@@ -44,9 +44,15 @@ export function NavBar({ activePage, showCta = false }: NavBarProps) {
     <header className="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur-sm px-4 sm:px-6 py-3 flex items-center justify-between">
       {/* ── Logo ── */}
       <Link href="/" className="flex items-center gap-2.5 group">
-        <span className="h-2 w-2 rounded-full bg-buy animate-pulse" />
-        {/* Swap the span below for an <Image> once logo.svg / logo.png is in public/ */}
-        <span className="font-mono text-sm font-semibold tracking-widest text-foreground group-hover:text-buy transition-colors">
+        <Image
+          src="/zentryx-logo.png"
+          alt="Zentryx"
+          width={28}
+          height={28}
+          className="rounded-md"
+          priority
+        />
+        <span className="font-mono text-sm font-semibold tracking-widest text-foreground group-hover:text-cyan transition-colors">
           ZENTRYX
         </span>
       </Link>
@@ -104,7 +110,13 @@ export function NavBar({ activePage, showCta = false }: NavBarProps) {
                 className="flex items-center gap-2"
                 onClick={() => setOpen(false)}
               >
-                <span className="h-2 w-2 rounded-full bg-buy animate-pulse" />
+                <Image
+                  src="/zentryx-logo.png"
+                  alt="Zentryx"
+                  width={24}
+                  height={24}
+                  className="rounded-sm"
+                />
                 <span className="font-mono text-sm font-semibold tracking-widest text-foreground">
                   ZENTRYX
                 </span>
