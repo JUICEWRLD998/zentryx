@@ -276,6 +276,165 @@ async def send_startup_message() -> None:
         logger.warning("Telegram startup message failed: %s", exc)
 
 
+async def _build_briefing_data() -> dict:
+    """
+    Aggregate the last 24 hours of whale trading activity from DB.
+
+    Returns a dict with keys:
+      total_trades, buy_count, sell_count, total_volume_usd,
+      accumulation_tokens (list of {symbol, wallet_count, total_usd}),
+      exit_tokens         (list of {symbol, wallet_count, total_usd}),
+      best_signal         ({symbol, return_pct}) or None
+    """
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy import select
+    from db import trade_event_table, get_session
+    from services.signal_stats import get_cached_stats
+
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+
+    async with get_session() as session:
+        result = await session.execute(
+            select(trade_event_table).where(
+                trade_event_table.c.timestamp >= cutoff
+            )
+        )
+        rows = result.fetchall()
+
+    total_trades = len(rows)
+    buy_rows = [r for r in rows if (r.side or "").upper() == "BUY"]
+    sell_rows = [r for r in rows if (r.side or "").upper() == "SELL"]
+    buy_count = len(buy_rows)
+    sell_count = len(sell_rows)
+    total_volume_usd = sum(r.usd_value or 0.0 for r in rows)
+
+    # Group BUY rows by (token_address, symbol) → count unique wallets + total usd
+    def _group_by_token(trade_rows: list) -> list[dict]:
+        token_map: dict[str, dict] = {}
+        for r in trade_rows:
+            key = r.token_address
+            sym = r.token_symbol or key[:8]
+            if key not in token_map:
+                token_map[key] = {"symbol": sym, "wallets": set(), "total_usd": 0.0}
+            if r.wallet_id:
+                token_map[key]["wallets"].add(r.wallet_id)
+            token_map[key]["total_usd"] += r.usd_value or 0.0
+
+        grouped = [
+            {"symbol": v["symbol"], "wallet_count": len(v["wallets"]), "total_usd": v["total_usd"]}
+            for v in token_map.values()
+        ]
+        return sorted(grouped, key=lambda x: x["wallet_count"], reverse=True)[:3]
+
+    accumulation_tokens = _group_by_token(buy_rows)
+    exit_tokens = _group_by_token(sell_rows)
+
+    # Best signal from signal_stats cache
+    best_signal = None
+    stats = get_cached_stats()
+    if stats and stats.get("top_performers"):
+        top = stats["top_performers"][0]
+        best_signal = {"symbol": top.get("symbol", "???"), "return_pct": top.get("return_pct", 0.0)}
+
+    return {
+        "total_trades": total_trades,
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "total_volume_usd": total_volume_usd,
+        "accumulation_tokens": accumulation_tokens,
+        "exit_tokens": exit_tokens,
+        "best_signal": best_signal,
+    }
+
+
+async def send_daily_briefing() -> None:
+    """
+    Build and send the daily Zentryx market briefing to the Telegram channel.
+    Called by the scheduler every day at 09:00 UTC.
+    AI section is included if Groq is available; omitted gracefully if not.
+    """
+    bot = _get_bot()
+    chat_id = _chat_id()
+    if not bot or not chat_id:
+        logger.debug("Telegram not configured — skipping daily briefing.")
+        return
+
+    try:
+        from datetime import datetime, timezone
+        from services.gemini import analyse_daily_briefing
+
+        data = await _build_briefing_data()
+
+        if data["total_trades"] == 0:
+            await bot.send_message(
+                chat_id=chat_id,
+                text="🌅 <b>Zentryx Daily Briefing</b>\nNo whale trades recorded in the last 24 hours. Quiet market day.",
+                parse_mode="HTML",
+            )
+            return
+
+        ai_insight = await analyse_daily_briefing(data)
+
+        # Header
+        now_utc = datetime.now(tz=timezone.utc)
+        # Cross-platform day formatting (no leading zero)
+        day_num = now_utc.day
+        month_name = now_utc.strftime("%B")
+        weekday = now_utc.strftime("%A")
+        date_str = f"{weekday} {day_num} {month_name}"
+
+        lines: list[str] = [
+            f"🌅 <b>ZENTRYX DAILY BRIEFING — {date_str}</b>",
+            "━━━━━━━━━━━━━━━━━━",
+            "",
+            "📊 <b>Last 24 Hours</b>",
+            f"• {data['total_trades']} whale trades tracked",
+            f"• {data['buy_count']} BUY signals / {data['sell_count']} SELL signals",
+            f"• ${data['total_volume_usd']:,.0f} total notional volume",
+        ]
+
+        # Accumulation block
+        if data["accumulation_tokens"]:
+            lines += ["", "🔥 <b>Smart Money Accumulation</b>"]
+            for i, t in enumerate(data["accumulation_tokens"], 1):
+                lines.append(
+                    f"{i}. ${t['symbol']} — {t['wallet_count']} wallet(s) entered (${t['total_usd']:,.0f} combined)"
+                )
+
+        # Exit block — only if there are sell events
+        if data["exit_tokens"] and data["sell_count"] > 0:
+            lines += ["", "⚠️ <b>Smart Money Exits</b>"]
+            for t in data["exit_tokens"]:
+                lines.append(f"• ${t['symbol']} — {t['wallet_count']} wallet(s) reduced positions")
+
+        # AI insight — omitted if Groq unavailable
+        if ai_insight:
+            lines += ["", "🤖 <b>AI Market Insight</b>", ai_insight]
+
+        # Best signal — omitted if no profitability data yet
+        if data["best_signal"]:
+            s = data["best_signal"]
+            ret = s["return_pct"]
+            ret_str = f"{ret:+.1f}%"
+            badge = "✅" if ret > 0 else "❌"
+            lines += ["", f"📈 <b>Best Signal Yesterday</b>", f"${s['symbol']} {ret_str} since whale entry {badge}"]
+
+        # Footer
+        lines += ["", "View live → zentryx.app/live"]
+
+        text = "\n".join(lines)
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        logger.info("Daily briefing sent: %d trades, AI=%s", data["total_trades"], ai_insight is not None)
+
+    except Exception as exc:
+        logger.error("Daily briefing failed: %s", exc, exc_info=True)
+
+
 # ── Bot command handlers ────────────────────────────────────────────────────
 
 async def _check_cooldown(bot: Bot, update: Update) -> bool:

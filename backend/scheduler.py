@@ -15,6 +15,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from services.wallet_discovery import discover_wallets
 from services.snapshot import take_wallet_snapshots, cleanup_old_trades
 from services.signal_stats import calculate_signal_profitability
+from services.telegram import send_daily_briefing
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,16 @@ scheduler.add_job(
     trigger="interval",
     hours=2,
     id="signal_profitability",
+    replace_existing=True,
+)
+
+# Job 5 — Daily at 09:00 UTC: send market briefing to Telegram channel
+scheduler.add_job(
+    send_daily_briefing,
+    trigger="cron",
+    hour=9,
+    minute=0,
+    id="daily_briefing",
     replace_existing=True,
 )
 

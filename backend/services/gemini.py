@@ -193,3 +193,73 @@ async def analyse_trade(
             return None
 
 
+async def analyse_daily_briefing(data: dict) -> str | None:
+    """
+    Generate a market-wide narrative insight for the daily briefing.
+
+    Receives the aggregated 24h briefing data dict and returns a 3-4 sentence
+    prose string, or None on any error (briefing still sends without AI section).
+    """
+    global _last_call_ts
+
+    client = await _get_client()
+    if client is None:
+        return None
+
+    # Build a compact context string for the prompt
+    acc_lines = "\n".join(
+        f"  - ${t['symbol']}: {t['wallet_count']} whale wallet(s), ${t['total_usd']:,.0f} combined"
+        for t in data.get("accumulation_tokens", [])
+    ) or "  (none)"
+    exit_lines = "\n".join(
+        f"  - ${t['symbol']}: {t['wallet_count']} wallet(s) exiting, ${t['total_usd']:,.0f} total"
+        for t in data.get("exit_tokens", [])
+    ) or "  (none)"
+
+    context = (
+        f"LAST 24H WHALE SUMMARY\n"
+        f"Total trades: {data.get('total_trades', 0)} "
+        f"({data.get('buy_count', 0)} BUYs / {data.get('sell_count', 0)} SELLs)\n"
+        f"Total notional volume: ${data.get('total_volume_usd', 0):,.0f}\n\n"
+        f"Smart money accumulation (top tokens by wallet count):\n{acc_lines}\n\n"
+        f"Smart money exits (top tokens):\n{exit_lines}"
+    )
+
+    system_msg = (
+        "You are a concise Solana on-chain market analyst writing a daily briefing. "
+        "Given the whale trading summary, write 3-4 sentences of market insight. "
+        "Focus on patterns, rotation themes, and what the consensus signals suggest. "
+        "Be direct and specific. Do NOT use bullet points. Plain prose only."
+    )
+
+    async with _groq_sem:
+        now = time.monotonic()
+        wait = _MIN_INTERVAL_S - (now - _last_call_ts)
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+        try:
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: client.chat.completions.create(
+                    model=_MODEL_NAME,
+                    messages=[
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": context},
+                    ],
+                    temperature=0.4,
+                    max_tokens=200,
+                ),
+            )
+            _last_call_ts = time.monotonic()
+            insight = response.choices[0].message.content.strip()
+            logger.info("Daily briefing AI insight generated (%d chars)", len(insight))
+            return insight
+
+        except Exception as exc:
+            logger.warning("Daily briefing Groq call failed: %s", exc)
+            _last_call_ts = time.monotonic()
+            return None
+
+
