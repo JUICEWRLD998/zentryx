@@ -17,7 +17,7 @@ type NavPage =
   | "leaderboard"
   | "live"
   | "movers"
-  | "heatmap"
+  | "trades"
   | "trending"
   | "new-listings"
   | undefined;
@@ -26,7 +26,7 @@ const NAV_LINKS: { label: string; href: string; page: NavPage }[] = [
   { label: "LEADERBOARD", href: "/dashboard", page: "leaderboard" },
   { label: "LIVE FEED",   href: "/live",      page: "live" },
   { label: "MOVERS",      href: "/movers",    page: "movers" },
-  { label: "HEATMAP",     href: "/heatmap",   page: "heatmap" },
+  { label: "TRADES",      href: "/trades",    page: "trades" },
   { label: "TRENDING",    href: "/trending",  page: "trending" },
   { label: "NEW LISTINGS", href: "/new-listings", page: "new-listings" },
 ];
