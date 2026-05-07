@@ -366,7 +366,7 @@ export default function LivePage() {
               LIVE FEED
             </h1>
             <p className="font-mono text-xs text-muted-foreground mt-0.5">
-              Large trades polled from Birdeye · click a card for details
+              Live tracked-wallet trades via Solana RPC · click a card for details
             </p>
           </div>
           <div className="flex items-center gap-4">

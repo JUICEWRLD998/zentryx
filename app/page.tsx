@@ -7,7 +7,6 @@ import {
   Zap,
   TrendingUp,
   Bell,
-  BarChart3,
   Eye,
   ShieldCheck,
   Bot,
@@ -71,16 +70,6 @@ const FEATURES = [
     border: "hover:border-yellow-400/40",
   },
   {
-    icon: BarChart3,
-    title: "Smart Money Heatmap",
-    description:
-      "See exactly which tokens smart money is accumulating or distributing across hourly windows. Spot directional bias before it shows up in price.",
-    href: "/heatmap",
-    cta: "View Heatmap →",
-    accent: "text-orange-400",
-    border: "hover:border-orange-400/40",
-  },
-  {
     icon: Layers,
     title: "New Listings Scanner",
     description:
@@ -122,7 +111,7 @@ const HOW_IT_WORKS = [
     step: "03",
     icon: Bell,
     title: "You Copy With Confidence",
-    body: "Act on intelligence, not noise. Check token security scores, honeypot detection, and the smart money heatmap before you follow. Every alert includes who moved, what they bought, how much — and whether the token is safe to enter.",
+    body: "Act on intelligence, not noise. Check token security scores and honeypot detection before you follow. Every alert includes who moved, what they bought, how much, and whether the token is safe to enter.",
     accent: "text-violet-400",
   },
 ];
@@ -266,7 +255,7 @@ export default function Landing() {
 
             <p className="text-muted-foreground text-lg sm:text-xl max-w-2xl mx-auto mb-10 leading-relaxed">
               Zentryx tracks Solana&apos;s top-performing wallets in real time. Surface live whale trades,
-              scan new token listings, read the smart money heatmap, and get Telegram alerts the
+              scan new token listings, and get Telegram alerts the
               instant a whale moves.
             </p>
 
