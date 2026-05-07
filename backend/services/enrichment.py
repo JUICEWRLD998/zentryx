@@ -52,6 +52,11 @@ _CONSENSUS_WINDOW_S: float = 7200.0  # 2 hours
 _CONSENSUS_THRESHOLD: int = 2        # wallets needed to flag consensus
 _consensus_tracker: dict[str, list[tuple[str, float]]] = defaultdict(list)
 
+# Per-token Telegram alert cooldown — prevents restart bursts and SELL spam.
+# Stores monotonic timestamp of the last time a channel alert was sent per token.
+_ALERT_COOLDOWN_S: float = 300.0     # 5 minutes between alerts for the same token
+_last_alerted: dict[str, float] = {} # { token_address: monotonic_ts }
+
 
 async def _get_enrichment_lock(token_address: str) -> asyncio.Lock:
     """Return (or lazily create) the per-token lock for enrichment fetches."""
@@ -756,21 +761,31 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
     await ws_manager.broadcast(broadcast_payload)
 
     # ── Telegram: shared channel alert ───────────────────────────────────
-    asyncio.create_task(
-        send_trade_alert(
-            wallet_label=wallet_label,
-            wallet_address=wallet_address or "",
-            token_symbol=mini_report.symbol or token_address[:8],
-            token_address=token_address,
-            side=side.upper(),
-            usd_value=float(usd_value or 0),
-            security_score=mini_report.security_score,
-            smart_money=mini_report.smart_money_flag,
-            momentum_24h=mini_report.momentum_24h,
-            copy_score=copy_score,
-            consensus_count=consensus_count,
+    now_mono = time.monotonic()
+    last_alert_ts = _last_alerted.get(token_address, 0.0)
+    if now_mono - last_alert_ts >= _ALERT_COOLDOWN_S:
+        _last_alerted[token_address] = now_mono
+        asyncio.create_task(
+            send_trade_alert(
+                wallet_label=wallet_label,
+                wallet_address=wallet_address or "",
+                token_symbol=mini_report.symbol or token_address[:8],
+                token_address=token_address,
+                side=side.upper(),
+                usd_value=float(usd_value or 0),
+                security_score=mini_report.security_score,
+                smart_money=mini_report.smart_money_flag,
+                momentum_24h=mini_report.momentum_24h,
+                copy_score=copy_score,
+                consensus_count=consensus_count,
+            )
         )
-    )
+    else:
+        logger.debug(
+            "Alert cooldown active for %s — skipping channel alert (%.0fs remaining)",
+            mini_report.symbol or token_address[:8],
+            _ALERT_COOLDOWN_S - (now_mono - last_alert_ts),
+        )
 
     # ── Telegram: per-user watchlist DMs ─────────────────────────────────
     asyncio.create_task(
