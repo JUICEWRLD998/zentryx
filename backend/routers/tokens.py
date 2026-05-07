@@ -439,6 +439,16 @@ async def get_new_listings_route() -> list[dict]:
     if not items:
         return []
 
+    # Deduplicate by address (Birdeye occasionally returns the same token twice)
+    seen: set[str] = set()
+    unique_items: list[dict] = []
+    for item in items:
+        addr = item.get("address", "")
+        if addr and addr not in seen:
+            seen.add(addr)
+            unique_items.append(item)
+    items = unique_items
+
     now_ts = datetime.now(tz=timezone.utc).timestamp()
 
     # Parallel security enrichment for top 15 only (rate-limit guard)

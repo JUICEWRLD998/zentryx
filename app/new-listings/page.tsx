@@ -267,7 +267,7 @@ export default function NewListingsPage() {
         ) : (
           <div className="flex flex-col gap-2">
             {data.map((token, i) => (
-              <ListingRow key={token.address} token={token} rank={i + 1} />
+              <ListingRow key={`${token.address}-${i}`} token={token} rank={i + 1} />
             ))}
           </div>
         )}
