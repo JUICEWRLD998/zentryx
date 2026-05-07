@@ -1,31 +1,31 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
-import { useState, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { NavBar } from "@/components/navbar";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-// ── Types ──────────────────────────────────────────────────────────────────
-
 type TrendingToken = {
+  rank: number;
   address: string;
   symbol: string;
   name: string;
   logo_uri: string;
   price: number;
+  price_change_24h: number;
   volume_24h_usd: number;
+  volume_change_24h: number;
   liquidity: number;
   market_cap: number;
   smart_buy_count: number;
   smart_score: number;
 };
 
-type SortKey = "smart_score" | "volume_24h_usd" | "liquidity";
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-function fmtUsd(n: number): string {
+function fmtUsd(n: number | null | undefined): string {
+  if (n == null || isNaN(n)) return "$0";
   if (Math.abs(n) >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(2)}B`;
   if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
   if (Math.abs(n) >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
@@ -34,108 +34,49 @@ function fmtUsd(n: number): string {
   return "$0";
 }
 
-function fmtScore(n: number): string {
-  return n.toFixed(1);
+function fmtPct(n: number | null | undefined): string {
+  if (n == null || isNaN(n)) return "0.0%";
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${n.toFixed(1)}%`;
 }
 
-// ── Sub-components ─────────────────────────────────────────────────────────
-
-function TokenRow({ token, rank }: { token: TrendingToken; rank: number }) {
-  const hasWhales = token.smart_buy_count > 0;
-
-  return (
-    <Link
-      href={`/token/${token.address}`}
-      className="group grid grid-cols-[2rem_1fr_auto_auto_auto_auto] sm:grid-cols-[2rem_1fr_auto_auto_auto_auto] items-center gap-3 px-4 py-3 rounded-lg border border-border/50 bg-card/60 hover:bg-card hover:border-border hover:shadow-sm transition-all duration-150"
-    >
-      {/* Rank */}
-      <span className="font-mono text-xs text-muted-foreground text-center">{rank}</span>
-
-      {/* Token identity */}
-      <div className="flex items-center gap-2.5 min-w-0">
-        <div className="w-7 h-7 rounded-full bg-muted flex items-center justify-center shrink-0 overflow-hidden">
-          {token.logo_uri ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={token.logo_uri}
-              alt={token.symbol}
-              className="w-full h-full object-cover"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-            />
-          ) : (
-            <span className="font-mono text-xs font-bold text-muted-foreground">
-              {token.symbol.slice(0, 2).toUpperCase()}
-            </span>
-          )}
-        </div>
-        <div className="min-w-0">
-          <p className="font-mono text-sm font-semibold text-foreground group-hover:text-buy transition-colors truncate">
-            ${token.symbol}
-          </p>
-          {token.name && token.name !== token.symbol && (
-            <p className="font-mono text-xs text-muted-foreground truncate hidden sm:block">{token.name}</p>
-          )}
-        </div>
-      </div>
-
-      {/* Whale badge */}
-      <div className="shrink-0">
-        {hasWhales ? (
-          <span className="rounded border border-cyan/30 bg-cyan/10 px-2 py-0.5 font-mono text-xs text-cyan whitespace-nowrap">
-            ×{token.smart_buy_count}
-          </span>
-        ) : (
-          <span className="font-mono text-xs text-muted-foreground/40">—</span>
-        )}
-      </div>
-
-      {/* Smart score */}
-      <div className="text-right shrink-0 hidden md:block">
-        <p className="font-mono text-xs text-foreground font-semibold">{fmtScore(token.smart_score)}</p>
-        <p className="font-mono text-xs text-muted-foreground">SCORE</p>
-      </div>
-
-      {/* Volume */}
-      <div className="text-right shrink-0 hidden sm:block">
-        <p className="font-mono text-xs text-foreground">{fmtUsd(token.volume_24h_usd)}</p>
-        <p className="font-mono text-xs text-muted-foreground">VOL 24H</p>
-      </div>
-
-      {/* Price */}
-      <div className="text-right shrink-0">
-        <p className="font-mono text-xs text-foreground">{fmtUsd(token.price)}</p>
-        <span className="text-muted-foreground text-xs group-hover:text-foreground transition-colors">→</span>
-      </div>
-    </Link>
-  );
+function pctColor(n: number | null | undefined): string {
+  if (!n) return "text-muted-foreground";
+  if (n > 0) return "text-buy";
+  if (n < 0) return "text-sell";
+  return "text-muted-foreground";
 }
 
-function TableSkeleton() {
+function TokenLogo({ uri, symbol }: { uri: string; symbol: string }) {
+  if (!uri) {
+    return (
+      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted font-mono text-[10px] font-bold text-muted-foreground">
+        {symbol.slice(0, 2)}
+      </div>
+    );
+  }
   return (
-    <div className="flex flex-col gap-2">
-      {[...Array(10)].map((_, i) => (
-        <div key={i} className="h-14 rounded-lg bg-muted/40 animate-pulse" />
-      ))}
+    <div className="relative h-7 w-7 shrink-0 overflow-hidden rounded-full bg-muted">
+      <Image src={uri} alt={symbol} fill className="object-cover" unoptimized />
     </div>
   );
 }
 
-// ── Page ───────────────────────────────────────────────────────────────────
-
 export default function TrendingPage() {
-  const [data, setData] = useState<TrendingToken[]>([]);
+  const [tokens, setTokens] = useState<TrendingToken[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [sortKey, setSortKey] = useState<SortKey>("smart_score");
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   const fetchTrending = useCallback(async () => {
     setLoading(true);
     setError(null);
+
     try {
       const res = await fetch(`${API_BASE}/api/trending`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setData(await res.json());
+      const raw = (await res.json()) as TrendingToken[];
+      setTokens(Array.isArray(raw) ? raw : []);
       setLastRefresh(new Date());
     } catch (e) {
       setError(String(e));
@@ -144,114 +85,86 @@ export default function TrendingPage() {
     }
   }, []);
 
-  useEffect(() => { fetchTrending(); }, [fetchTrending]);
-
-  const sorted = [...data].sort((a, b) => b[sortKey] - a[sortKey]);
-  const whaleCount = data.filter((t) => t.smart_buy_count > 0).length;
-
-  const SORT_TABS: { key: SortKey; label: string }[] = [
-    { key: "smart_score", label: "SMART SCORE" },
-    { key: "volume_24h_usd", label: "VOLUME" },
-    { key: "liquidity", label: "LIQUIDITY" },
-  ];
+  useEffect(() => {
+    fetchTrending();
+    const interval = setInterval(fetchTrending, 45_000);
+    return () => clearInterval(interval);
+  }, [fetchTrending]);
 
   return (
     <div className="min-h-screen flex flex-col">
       <NavBar activePage="trending" />
 
-      <main className="flex-1 px-4 sm:px-6 py-8 max-w-4xl mx-auto w-full">
-        {/* Page header */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between flex-wrap gap-4">
-            <div>
-              <h1 className="font-mono text-2xl font-bold text-foreground tracking-wide">
-                Smart Money Trending
-              </h1>
-              <p className="font-mono text-xs text-muted-foreground mt-1">
-                Tokens ranked by whale activity + volume · 48h lookback
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              {lastRefresh && (
-                <span className="font-mono text-xs text-muted-foreground">
-                  {lastRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                </span>
-              )}
-              <button
-                onClick={fetchTrending}
-                disabled={loading}
-                className="font-mono text-xs border border-border rounded px-4 py-2 text-muted-foreground hover:text-foreground hover:border-foreground/40 transition-colors disabled:opacity-40"
-              >
-                {loading ? "LOADING..." : "↻ REFRESH"}
-              </button>
-            </div>
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h1 className="font-mono text-2xl font-bold tracking-wide text-foreground">Trending Tokens</h1>
+            <p className="font-mono text-xs text-muted-foreground">Top tokens by 24h volume</p>
           </div>
-
-          {/* Stats + sort row */}
-          {!loading && data.length > 0 && (
-            <div className="flex items-center justify-between flex-wrap gap-3 mt-4">
-              <div className="flex items-center gap-6 font-mono text-xs text-muted-foreground">
-                <span>{data.length} tokens tracked</span>
-                {whaleCount > 0 && (
-                  <span className="text-cyan">
-                    {whaleCount} with whale activity
-                  </span>
-                )}
-              </div>
-              {/* Sort toggle */}
-              <div className="flex rounded border border-border overflow-hidden">
-                {SORT_TABS.map((tab) => (
-                  <button
-                    key={tab.key}
-                    onClick={() => setSortKey(tab.key)}
-                    className={`font-mono text-xs px-3 py-1.5 transition-colors ${
-                      sortKey === tab.key
-                        ? "bg-buy text-background font-semibold"
-                        : "text-muted-foreground hover:text-foreground hover:bg-card"
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Error */}
-        {error && (
-          <div className="rounded-lg border border-border bg-card p-6 text-center font-mono text-sm text-muted-foreground mb-6">
-            Failed to load trending data — {error}
-            <button onClick={fetchTrending} className="ml-4 text-xs text-foreground underline underline-offset-2">
-              Retry
+          <div className="flex items-center gap-3">
+            {lastRefresh && (
+              <span className="font-mono text-xs text-muted-foreground">
+                {lastRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+            <button
+              onClick={fetchTrending}
+              disabled={loading}
+              suppressHydrationWarning
+              className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 font-mono text-xs text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground disabled:opacity-50"
+            >
+              <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+              REFRESH
             </button>
           </div>
-        )}
+        </div>
 
-        {/* Table header */}
-        {!loading && sorted.length > 0 && (
-          <div className="grid grid-cols-[2rem_1fr_auto_auto_auto_auto] sm:grid-cols-[2rem_1fr_auto_auto_auto_auto] items-center gap-3 px-4 pb-2 mb-1 border-b border-border/40">
-            <span className="font-mono text-xs text-muted-foreground">#</span>
-            <span className="font-mono text-xs text-muted-foreground">TOKEN</span>
-            <span className="font-mono text-xs text-muted-foreground text-right">WHALES</span>
-            <span className="font-mono text-xs text-muted-foreground text-right hidden md:block">SCORE</span>
-            <span className="font-mono text-xs text-muted-foreground text-right hidden sm:block">VOL 24H</span>
-            <span className="font-mono text-xs text-muted-foreground text-right">PRICE</span>
+        {error && (
+          <div className="mb-6 rounded-lg border border-border bg-card p-5 font-mono text-xs text-muted-foreground">
+            Failed to load trending feed: {error}
           </div>
         )}
 
-        {/* Rows */}
         {loading ? (
-          <TableSkeleton />
-        ) : sorted.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48 font-mono text-xs text-muted-foreground gap-2">
-            <span className="text-2xl">—</span>
-            <span>No trending data available</span>
+          <div className="space-y-2">
+            {Array.from({ length: 10 }).map((_, i) => (
+              <div key={i} className="h-14 animate-pulse rounded-lg border border-border/40 bg-card/60" />
+            ))}
+          </div>
+        ) : tokens.length === 0 ? (
+          <div className="flex h-56 items-center justify-center rounded-lg border border-border bg-card font-mono text-xs text-muted-foreground">
+            No trending data available
           </div>
         ) : (
-          <div className="flex flex-col gap-2">
-            {sorted.map((token, i) => (
-              <TokenRow key={token.address} token={token} rank={i + 1} />
+          <div className="overflow-hidden rounded-xl border border-border/60 bg-card/60">
+            <div className="hidden grid-cols-[44px_1fr_110px_90px_110px_90px] gap-2 border-b border-border/60 px-3 py-2 font-mono text-[10px] tracking-widest text-muted-foreground md:grid">
+              <span>RANK</span>
+              <span>TOKEN</span>
+              <span className="text-right">PRICE</span>
+              <span className="text-right">24H</span>
+              <span className="text-right">VOLUME</span>
+              <span className="text-right">VOL CHG</span>
+            </div>
+
+            {tokens.map((t) => (
+              <Link
+                key={t.address}
+                href={`/token/${t.address}`}
+                className="grid grid-cols-[44px_1fr_90px] items-center gap-2 border-b border-border/50 px-3 py-3 transition-colors hover:bg-muted/30 md:grid-cols-[44px_1fr_110px_90px_110px_90px]"
+              >
+                <span className="font-mono text-xs text-muted-foreground">#{t.rank}</span>
+                <div className="flex min-w-0 items-center gap-2">
+                  <TokenLogo uri={t.logo_uri} symbol={t.symbol} />
+                  <div className="min-w-0">
+                    <p className="truncate font-mono text-sm font-semibold text-foreground">{t.symbol}</p>
+                    <p className="truncate font-mono text-[10px] text-muted-foreground">{t.name || t.address.slice(0, 8)}</p>
+                  </div>
+                </div>
+                <p className="text-right font-mono text-xs text-foreground">{fmtUsd(t.price)}</p>
+                <p className={`hidden text-right font-mono text-xs md:block ${pctColor(t.price_change_24h)}`}>{fmtPct(t.price_change_24h)}</p>
+                <p className="hidden text-right font-mono text-xs text-foreground md:block">{fmtUsd(t.volume_24h_usd)}</p>
+                <p className={`hidden text-right font-mono text-xs md:block ${pctColor(t.volume_change_24h)}`}>{fmtPct(t.volume_change_24h)}</p>
+              </Link>
             ))}
           </div>
         )}

@@ -1,156 +1,55 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { NavBar } from "@/components/navbar";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
-// ── Types ──────────────────────────────────────────────────────────────────
-
-type RiskLevel = "SAFE" | "RISKY" | "DANGER" | "UNKNOWN";
 
 type NewListing = {
   address: string;
   symbol: string;
   name: string;
   logo_uri: string;
+  price: number;
+  volume_24h_usd: number;
   liquidity: number;
-  source: string;
+  market_cap: number;
   age_hours: number;
-  freezeable: boolean;
-  mutable_metadata: boolean;
-  transfer_fee: boolean;
-  top10_holder_pct: number;
-  risk_level: RiskLevel;
+  risk_level: string;
 };
 
-// ── Helpers ────────────────────────────────────────────────────────────────
-
 function fmtUsd(n: number): string {
+  if (Math.abs(n) >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(2)}B`;
   if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
   if (Math.abs(n) >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
-  return `$${n.toFixed(0)}`;
+  if (n >= 1) return `$${n.toFixed(2)}`;
+  if (n > 0) return `$${n.toPrecision(3)}`;
+  return "$0";
 }
 
-function fmtAge(hours: number): string {
-  if (hours < 1) return `${Math.round(hours * 60)}m`;
-  if (hours < 24) return `${hours.toFixed(1)}h`;
-  return `${(hours / 24).toFixed(1)}d`;
+function riskColor(risk: string): string {
+  if (risk === "DANGER") return "text-sell";
+  if (risk === "RISKY") return "text-yellow-500";
+  return "text-buy";
 }
-
-function RiskBadge({ level }: { level: RiskLevel }) {
-  const styles: Record<RiskLevel, string> = {
-    SAFE: "border-buy/30 bg-buy/10 text-buy",
-    RISKY: "border-yellow-400/30 bg-yellow-400/10 text-yellow-400",
-    DANGER: "border-sell/30 bg-sell/10 text-sell",
-    UNKNOWN: "border-border bg-muted/20 text-muted-foreground",
-  };
-  return (
-    <span className={`rounded border px-2 py-0.5 font-mono text-xs font-semibold ${styles[level]}`}>
-      {level}
-    </span>
-  );
-}
-
-// ── Sub-components ─────────────────────────────────────────────────────────
-
-function ListingRow({ token, rank }: { token: NewListing; rank: number }) {
-  return (
-    <Link
-      href={`/token/${token.address}`}
-      className="group flex items-center gap-3 px-4 py-3 rounded-lg border border-border/50 bg-card/60 hover:bg-card hover:border-border hover:shadow-sm transition-all duration-150"
-    >
-      {/* Rank */}
-      <span className="font-mono text-xs text-muted-foreground w-5 text-center shrink-0">{rank}</span>
-
-      {/* Logo */}
-      <div className="w-7 h-7 rounded-full bg-muted flex items-center justify-center shrink-0 overflow-hidden">
-        {token.logo_uri ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={token.logo_uri}
-            alt={token.symbol}
-            className="w-full h-full object-cover"
-            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-          />
-        ) : (
-          <span className="font-mono text-xs font-bold text-muted-foreground">
-            {token.symbol.slice(0, 2).toUpperCase()}
-          </span>
-        )}
-      </div>
-
-      {/* Symbol + source */}
-      <div className="flex-1 min-w-0">
-        <p className="font-mono text-sm font-semibold text-foreground group-hover:text-buy transition-colors truncate">
-          ${token.symbol}
-        </p>
-        <p className="font-mono text-xs text-muted-foreground truncate">
-          {token.source || token.name || "—"}
-        </p>
-      </div>
-
-      {/* Age */}
-      <span className="font-mono text-xs text-foreground shrink-0 hidden sm:inline text-right w-16">{fmtAge(token.age_hours)}</span>
-
-      {/* Liquidity */}
-      <span className="font-mono text-xs text-foreground shrink-0 hidden sm:inline text-right w-24">{fmtUsd(token.liquidity)}</span>
-
-      {/* Flags */}
-      <div className="hidden md:flex items-center gap-1 shrink-0 w-28">
-        {token.freezeable && (
-          <span title="Freezeable mint" className="rounded bg-sell/10 border border-sell/20 px-1.5 py-0.5 font-mono text-xs text-sell">
-            FREEZE
-          </span>
-        )}
-        {token.transfer_fee && (
-          <span title="Transfer fee enabled" className="rounded bg-yellow-400/10 border border-yellow-400/20 px-1.5 py-0.5 font-mono text-xs text-yellow-400">
-            FEE
-          </span>
-        )}
-        {token.mutable_metadata && (
-          <span title="Mutable metadata" className="rounded bg-muted/40 border border-border px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
-            MUT
-          </span>
-        )}
-      </div>
-
-      {/* Risk badge */}
-      <div className="shrink-0">
-        <RiskBadge level={token.risk_level} />
-      </div>
-
-      <span className="text-muted-foreground group-hover:text-foreground transition-colors text-xs shrink-0">→</span>
-    </Link>
-  );
-}
-
-function TableSkeleton() {
-  return (
-    <div className="flex flex-col gap-2">
-      {[...Array(10)].map((_, i) => (
-        <div key={i} className="h-14 rounded-lg bg-muted/40 animate-pulse" />
-      ))}
-    </div>
-  );
-}
-
-// ── Page ───────────────────────────────────────────────────────────────────
 
 export default function NewListingsPage() {
-  const [data, setData] = useState<NewListing[]>([]);
+  const [tokens, setTokens] = useState<NewListing[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
-  const fetchListings = useCallback(async () => {
+  const fetchNewListings = useCallback(async () => {
     setLoading(true);
     setError(null);
+
     try {
       const res = await fetch(`${API_BASE}/api/new-listings`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setData(await res.json());
+      const raw = (await res.json()) as NewListing[];
+      setTokens(Array.isArray(raw) ? raw : []);
       setLastRefresh(new Date());
     } catch (e) {
       setError(String(e));
@@ -160,102 +59,81 @@ export default function NewListingsPage() {
   }, []);
 
   useEffect(() => {
-    fetchListings();
-    // Auto-refresh every 60s — new listings change fast
-    const interval = setInterval(fetchListings, 60_000);
+    fetchNewListings();
+    const interval = setInterval(fetchNewListings, 60_000);
     return () => clearInterval(interval);
-  }, [fetchListings]);
-
-  const safeCount = data.filter((t) => t.risk_level === "SAFE").length;
-  const dangerCount = data.filter((t) => t.risk_level === "DANGER").length;
+  }, [fetchNewListings]);
 
   return (
     <div className="min-h-screen flex flex-col">
       <NavBar activePage="new-listings" />
 
-      <main className="flex-1 px-4 sm:px-6 py-8 max-w-4xl mx-auto w-full">
-        {/* Page header */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between flex-wrap gap-4">
-            <div>
-              <h1 className="font-mono text-2xl font-bold text-foreground tracking-wide">
-                New Listings
-              </h1>
-              <p className="font-mono text-xs text-muted-foreground mt-1">
-                Recently launched Solana tokens · security-scored · auto-refreshes every 60s
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              {lastRefresh && (
-                <span className="font-mono text-xs text-muted-foreground">
-                  {lastRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                </span>
-              )}
-              <button
-                onClick={fetchListings}
-                disabled={loading}
-                className="font-mono text-xs border border-border rounded px-4 py-2 text-muted-foreground hover:text-foreground hover:border-foreground/40 transition-colors disabled:opacity-40"
-              >
-                {loading ? "LOADING..." : "↻ REFRESH"}
-              </button>
-            </div>
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h1 className="font-mono text-2xl font-bold tracking-wide text-foreground">New Listings</h1>
+            <p className="font-mono text-xs text-muted-foreground">Recently launched Solana tokens</p>
           </div>
-
-          {/* Risk summary */}
-          {!loading && data.length > 0 && (
-            <div className="flex items-center gap-6 mt-4 font-mono text-xs">
-              <div className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-buy" />
-                <span className="text-muted-foreground">{safeCount} safe</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-sell" />
-                <span className="text-muted-foreground">{dangerCount} danger</span>
-              </div>
-              <div className="flex items-center gap-2 text-muted-foreground/60">
-                <span>FREEZE = mint authority active</span>
-                <span>·</span>
-                <span>FEE = transfer tax</span>
-                <span>·</span>
-                <span>MUT = mutable metadata</span>
-              </div>
-            </div>
-          )}
+          <div className="flex items-center gap-3">
+            {lastRefresh && (
+              <span className="font-mono text-xs text-muted-foreground">
+                {lastRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+            <button
+              onClick={fetchNewListings}
+              disabled={loading}
+              className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 font-mono text-xs text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground disabled:opacity-50"
+            >
+              <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+              REFRESH
+            </button>
+          </div>
         </div>
 
-        {/* Error */}
         {error && (
-          <div className="rounded-lg border border-border bg-card p-6 text-center font-mono text-sm text-muted-foreground mb-6">
-            Failed to load new listings — {error}
-            <button onClick={fetchListings} className="ml-4 text-xs text-foreground underline underline-offset-2">
-              Retry
-            </button>
+          <div className="mb-6 rounded-lg border border-border bg-card p-5 font-mono text-xs text-muted-foreground">
+            Failed to load new listings: {error}
           </div>
         )}
 
-        {/* Rows */}
         {loading ? (
-          <TableSkeleton />
-        ) : data.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48 font-mono text-xs text-muted-foreground gap-2">
-            <span className="text-2xl">—</span>
-            <span>No new listings found</span>
+          <div className="space-y-2">
+            {Array.from({ length: 10 }).map((_, i) => (
+              <div key={i} className="h-14 animate-pulse rounded-lg border border-border/40 bg-card/60" />
+            ))}
+          </div>
+        ) : tokens.length === 0 ? (
+          <div className="flex h-56 items-center justify-center rounded-lg border border-border bg-card font-mono text-xs text-muted-foreground">
+            No new listings available
           </div>
         ) : (
-          <div className="flex flex-col gap-2">
-            {/* Column headers */}
-            <div className="hidden sm:flex items-center gap-3 px-4 pb-2 font-mono text-[10px] text-muted-foreground tracking-widest border-b border-border/50">
-              <span className="w-5 shrink-0" />
-              <span className="w-7 shrink-0" />
-              <span className="flex-1">TOKEN</span>
-              <span className="text-right w-16 shrink-0">AGE</span>
-              <span className="text-right w-24 shrink-0">LIQUIDITY</span>
-              <span className="hidden md:block w-28 shrink-0" />
-              <span className="w-20 shrink-0 text-right">SCORE</span>
-              <span className="w-3 shrink-0" />
+          <div className="overflow-hidden rounded-xl border border-border/60 bg-card/60">
+            <div className="hidden grid-cols-[1fr_100px_100px_100px_100px_80px] gap-2 border-b border-border/60 px-3 py-2 font-mono text-[10px] tracking-widest text-muted-foreground md:grid">
+              <span>TOKEN</span>
+              <span className="text-right">PRICE</span>
+              <span className="text-right">LIQUIDITY</span>
+              <span className="text-right">AGE (h)</span>
+              <span className="text-right">RISK</span>
+              <span className="text-center">ACTION</span>
             </div>
-            {data.map((token, i) => (
-              <ListingRow key={`${token.address}-${i}`} token={token} rank={i + 1} />
+
+            {tokens.map((t) => (
+              <Link
+                key={t.address}
+                href={`/token/${t.address}`}
+                className="grid grid-cols-[1fr_80px] items-center gap-2 border-b border-border/50 px-3 py-3 transition-colors hover:bg-muted/30 md:grid-cols-[1fr_100px_100px_100px_100px_80px]"
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-mono text-sm font-semibold text-foreground">{t.symbol}</p>
+                  <p className="truncate font-mono text-[10px] text-muted-foreground">{t.name || t.address.slice(0, 8)}</p>
+                </div>
+                <p className="text-right font-mono text-xs text-foreground md:text-sm">{fmtUsd(t.price)}</p>
+                <p className="hidden text-right font-mono text-xs text-foreground md:block">{fmtUsd(t.liquidity)}</p>
+                <p className="hidden text-center font-mono text-xs text-muted-foreground md:block">{t.age_hours.toFixed(1)}</p>
+                <p className={`hidden text-right font-mono text-xs md:block ${riskColor(t.risk_level)}`}>{t.risk_level}</p>
+                <p className="text-right font-mono text-xs text-muted-foreground md:text-cyan">→</p>
+              </Link>
             ))}
           </div>
         )}

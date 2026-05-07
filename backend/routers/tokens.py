@@ -322,11 +322,11 @@ async def get_trending() -> list[dict]:
     ranking falls back to pure volume order.
     """
     try:
-        raw = await birdeye.get_trending_tokens(
-            sort_by="v24hUSD",
-            sort_type="desc",
+        raw = await birdeye.get_token_trending(
+            sort_by="rank",
+            sort_type="asc",
             offset=0,
-            limit=50,
+            limit=20,
         )
     except Exception as exc:
         raise HTTPException(502, f"Failed to fetch trending tokens: {exc}")
@@ -351,26 +351,28 @@ async def get_trending() -> list[dict]:
             smart_buys = Counter(r.token_address for r in result.fetchall())
 
     result_list: list[dict] = []
-    for token in tokens:
+    for idx, token in enumerate(tokens, start=1):
         addr = token["address"]
         volume = token.get("v24hUSD") or 0
         whale_count = smart_buys.get(addr, 0)
         smart_score = round(whale_count * 10 + math.log1p(volume), 2)
         result_list.append({
+            "rank": token.get("rank") or idx,
             "address": addr,
             "symbol": token.get("symbol") or addr[:8],
             "name": token.get("name") or "",
             "logo_uri": token.get("logoURI") or "",
             "price": token.get("price") or 0,
+            "price_change_24h": token.get("priceChange24hPercent") or 0,
             "volume_24h_usd": volume,
+            "volume_change_24h": token.get("v24hChangePercent") or 0,
             "liquidity": token.get("liquidity") or 0,
             "market_cap": token.get("mc") or 0,
             "smart_buy_count": whale_count,
             "smart_score": smart_score,
         })
 
-    result_list.sort(key=lambda x: x["smart_score"], reverse=True)
-    return result_list[:20]
+    return result_list
 
 
 # ── New Listings ─────────────────────────────────────────────────────────────
