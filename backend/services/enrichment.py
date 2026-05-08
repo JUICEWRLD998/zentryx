@@ -723,7 +723,7 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
     watcher_user_ids = await _get_watcher_user_ids(wallet_id)
 
     # ── Gemini AI Analysis (non-blocking — fire in background task) ───────
-    async def _run_gemini() -> None:
+    async def _run_gemini(send_group_ai_followup: bool) -> None:
         from services.gemini import analyse_trade  # avoid circular import at module level
         from services.telegram import send_trade_alert_ai_followup
         result = await analyse_trade(
@@ -773,16 +773,14 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
                         telegram_user_id=watcher_user_id,
                     )
 
-                # Also send AI analysis to the shared group channel
-                await send_trade_alert_ai_followup(
-                    token_symbol=mini_report.symbol or token_address[:8],
-                    token_address=token_address,
-                    recommendation=mini_report.ai_recommendation,
-                    analysis=mini_report.ai_analysis,
-                    to_group=True,
-                )
-
-    asyncio.create_task(_run_gemini())
+                if send_group_ai_followup:
+                    await send_trade_alert_ai_followup(
+                        token_symbol=mini_report.symbol or token_address[:8],
+                        token_address=token_address,
+                        recommendation=mini_report.ai_recommendation,
+                        analysis=mini_report.ai_analysis,
+                        to_group=True,
+                    )
 
     # ── Broadcast to frontend WS clients ─────────────────────────────────
     broadcast_payload = {
@@ -802,10 +800,12 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
     await ws_manager.broadcast(broadcast_payload)
 
     # ── Telegram: shared channel alert ───────────────────────────────────
+    shared_channel_alert_sent = False
     now_mono = time.monotonic()
     last_alert_ts = _last_alerted.get(token_address, 0.0)
     if now_mono - last_alert_ts >= _ALERT_COOLDOWN_S:
         _last_alerted[token_address] = now_mono
+        shared_channel_alert_sent = True
         asyncio.create_task(
             send_trade_alert(
                 wallet_label=wallet_label,
@@ -827,6 +827,8 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
             mini_report.symbol or token_address[:8],
             _ALERT_COOLDOWN_S - (now_mono - last_alert_ts),
         )
+
+    asyncio.create_task(_run_gemini(shared_channel_alert_sent))
 
     # ── Telegram: per-user watchlist DMs ─────────────────────────────────
     asyncio.create_task(
