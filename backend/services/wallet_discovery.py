@@ -2,15 +2,15 @@
 Wallet discovery service.
 
 Calls Birdeye endpoint 1 (gainers-losers) for the week's top performers,
-then batches PnL data via endpoint 3 (pnl/multiple) — one batch call
-instead of one-per-wallet — filters to the top 15 by win rate + PnL,
+then fetches wallet PnL summaries per wallet (reliable across API changes),
+filters to the top 15 by win rate + PnL,
 stores them in a module-level dict, and upserts them into PostgreSQL.
 
-API call budget per discovery run (down from ~11 → 2 calls):
+API call budget per discovery run:
   1 × get_gainers_losers       — endpoint 1
-  1 × get_wallet_pnl_multiple  — endpoint 3 (all addresses in one call)
+    N × get_wallet_pnl_summary   — endpoint 2 (one call per discovered wallet)
   ──────────────────────────────────────────────────────────────────
-  Total: 2 CU/week  (was ~11 CU with individual pnl/summary calls)
+    Total: 1 + N calls (N is number of discovered wallets)
 """
 from __future__ import annotations
 
@@ -86,31 +86,15 @@ def _parse_pnl_item(item: dict) -> tuple[float, float, int]:
 
 async def _fetch_pnl_batch(addresses: list[str]) -> list[tuple[str, dict]]:
     """
-    Call /wallet/v2/pnl/multiple for up to _BATCH_SIZE addresses.
-    Returns a list of (address, raw_item_dict) pairs.
-    Falls back to individual /pnl/summary calls if the batch endpoint fails.
+    Fetch /wallet/v2/pnl/summary for each address in this chunk.
+
+    We intentionally use summary calls here because Birdeye's
+    /wallet/v2/pnl/multiple contract has proven inconsistent in production,
+    which caused startup 400s and noisy logs.
+
+    Returns list of (address, raw_summary_dict) pairs.
     """
     await asyncio.sleep(_INTER_BATCH_DELAY)
-    try:
-        raw = await birdeye.get_wallet_pnl_multiple(addresses)
-        data = raw.get("data")
-
-        # Response shape: list of items with 'address' field
-        if isinstance(data, list):
-            return [
-                (item.get("address", ""), item)
-                for item in data
-                if item.get("address")
-            ]
-        # Response shape: dict keyed by address
-        if isinstance(data, dict):
-            return [(addr, data[addr]) for addr in addresses if addr in data]
-
-        logger.warning("Unexpected pnl/multiple response shape — falling back to individual calls.")
-    except Exception as exc:
-        logger.warning("Batch PnL call failed (%s) — falling back to individual calls.", exc)
-
-    # Fallback: individual pnl/summary calls for this batch
     results: list[tuple[str, dict]] = []
     for addr in addresses:
         await asyncio.sleep(1.0)

@@ -109,9 +109,13 @@ async def get_wallet_pnl_summary(wallet: str, token: str | None = None) -> dict[
 
 async def get_wallet_pnl_multiple(wallet_list: list[str]) -> dict[str, Any]:
     """Endpoint 3 — /wallet/v2/pnl/multiple"""
+    if not wallet_list:
+        return {"data": []}
+
     return await _get(
         "/wallet/v2/pnl/multiple",
-        params={"list_address": ",".join(wallet_list)},
+        # Birdeye expects the `wallets` query param for this endpoint.
+        params={"wallets": ",".join(wallet_list)},
     )
 
 
