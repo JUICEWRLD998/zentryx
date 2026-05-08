@@ -77,6 +77,43 @@ async def get_ohlcv(
     ]
 
 
+# ── Token overview ─────────────────────────────────────────────────────────────
+
+@router.get("/tokens/{address}/overview")
+async def get_token_overview_route(address: str) -> dict:
+    """
+    Returns full Birdeye token overview for the given address.
+    Fields match the BirdeyeToken shape used by AlphaScope.
+    """
+    try:
+        raw = await birdeye.get_token_overview(address)
+    except Exception as exc:
+        logger.warning("Token overview fetch failed for %s: %s", address[:8], exc)
+        raise HTTPException(502, "Failed to fetch token data from Birdeye")
+
+    data = (raw or {}).get("data") or {}
+    if not data:
+        raise HTTPException(404, "Token not found or not yet indexed")
+
+    return {
+        "address":               address,
+        "symbol":                data.get("symbol", "?"),
+        "name":                  data.get("name", "Unknown"),
+        "logoURI":               data.get("logoURI") or data.get("logo_uri") or "",
+        "price":                 data.get("price") or 0,
+        "priceChange24hPercent": data.get("priceChange24hPercent") or 0,
+        "v24hUSD":               data.get("v24hUSD") or 0,
+        "v24hChangePercent":     data.get("v24hChangePercent") or 0,
+        "mc":                    data.get("mc") or 0,
+        "realMc":                data.get("realMc") or 0,
+        "liquidity":             data.get("liquidity") or 0,
+        "holder":                data.get("holder") or 0,
+        "supply":                data.get("supply") or 0,
+        "circulatingSupply":     data.get("circulatingSupply") or 0,
+        "lastTradeUnixTime":     data.get("lastTradeUnixTime") or 0,
+    }
+
+
 @router.get("/tokens/{address}/whale-buys")
 async def get_whale_buys(address: str) -> list[dict]:
     """
@@ -351,27 +388,29 @@ async def get_trending() -> list[dict]:
             smart_buys = Counter(r.token_address for r in result.fetchall())
 
     result_list: list[dict] = []
-    for idx, token in enumerate(tokens, start=1):
-        addr = token["address"]
+    for token in tokens:
+        addr = token.get("address") or ""
         volume = token.get("v24hUSD") or 0
         whale_count = smart_buys.get(addr, 0)
         smart_score = round(whale_count * 10 + math.log1p(volume), 2)
         result_list.append({
-            "rank": token.get("rank") or idx,
+            "rank": token.get("rank") or 0,
             "address": addr,
             "symbol": token.get("symbol") or addr[:8],
             "name": token.get("name") or "",
             "logo_uri": token.get("logoURI") or "",
             "price": token.get("price") or 0,
-            "price_change_24h": token.get("priceChange24hPercent") or 0,
+            "price_change_24h": token.get("priceChange24hPercent") or token.get("price24hChangePercent") or 0,
             "volume_24h_usd": volume,
-            "volume_change_24h": token.get("v24hChangePercent") or 0,
+            "volume_change_24h": token.get("v24hChangePercent") or token.get("volume24hChangePercent") or 0,
             "liquidity": token.get("liquidity") or 0,
-            "market_cap": token.get("mc") or 0,
+            "market_cap": token.get("mc") or token.get("marketcap") or 0,
             "smart_buy_count": whale_count,
             "smart_score": smart_score,
         })
 
+    # Preserve API rank order; attach smart_buy_count as supplementary signal
+    result_list.sort(key=lambda x: x["rank"])
     return result_list
 
 
@@ -481,6 +520,9 @@ async def get_new_listings_route() -> list[dict]:
             "symbol": item.get("symbol") or addr[:8],
             "name": item.get("name") or "",
             "logo_uri": item.get("logoURI") or "",
+            "price": item.get("price") or 0,
+            "volume_24h_usd": item.get("v24hUSD") or 0,
+            "market_cap": item.get("mc") or 0,
             "liquidity": item.get("liquidity") or 0,
             "source": item.get("source") or "",
             "age_hours": age_hours,

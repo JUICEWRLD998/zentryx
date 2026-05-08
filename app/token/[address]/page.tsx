@@ -1,645 +1,626 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useState, useEffect, useCallback } from "react";
-import { NavBar } from "@/components/navbar";
+import { useCallback, useEffect, useState } from "react";
 import {
-  RadialBarChart,
-  RadialBar,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-  ReferenceLine,
-} from "recharts";
+  AlertTriangle, ArrowLeft, BarChart2, CandlestickChart, CheckCircle2,
+  Droplets, ExternalLink, ShieldAlert, ShieldCheck, ShieldOff,
+  Sparkles, TrendingUp, Users, XCircle, Zap,
+} from "lucide-react";
+import { NavBar } from "@/components/navbar";
+import dynamic from "next/dynamic";
+
+const OHLCVChart = dynamic(() => import("./_components/OHLCVChart"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-97.5 items-center justify-center rounded-xl border border-border bg-card">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-cyan border-t-transparent" />
+    </div>
+  ),
+});
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-// ── Types ──────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-type MiniReport = {
-  token_address: string;
-  security_score: number | null;
-  is_honeypot: boolean | null;
-  smart_money_flag: boolean;
-  momentum_24h: number | null;
-  holder_count: number | null;
-  buy_sell_ratio: number | null;
-  total_liquidity_usd: number | null;
-  symbol: string | null;
-  price: number | null;
-  market_cap: number | null;
-  volume_24h: number | null;
-};
-
-type OhlcvCandle = {
-  time: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-};
-
-type WhaleBuy = {
-  time: number;
-  usd_value: number;
-  wallet_label: string;
-  smart_money: boolean;
-};
-
-type Timeframe = "1D" | "7D" | "30D";
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-function fmtUsd(n: number | null | undefined): string {
-  if (n == null) return "—";
-  if (Math.abs(n) >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(2)}B`;
-  if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
-  if (Math.abs(n) >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
-  return `$${n.toFixed(4)}`;
+interface TokenOverview {
+  address: string;
+  symbol: string;
+  name: string;
+  logoURI: string;
+  price: number;
+  priceChange24hPercent: number;
+  v24hUSD: number;
+  v24hChangePercent: number;
+  mc: number;
+  realMc: number;
+  liquidity: number;
+  holder: number;
+  supply: number;
+  circulatingSupply: number;
+  lastTradeUnixTime: number;
 }
 
-function fmtNum(n: number | null | undefined): string {
-  if (n == null) return "—";
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return n.toLocaleString();
+type Verdict = "BUY" | "WATCH" | "AVOID";
+type ScoreLabel =
+  | "high-risk" | "low-liquidity" | "new-token" | "trending" | "breakout"
+  | "whale-activity" | "low-holders" | "high-volume" | "concentrated-supply"
+  | "lp-burned" | "mintable" | "freezeable" | "transfer-fee" | "mutable-metadata"
+  | "volume-spike" | "price-breakout" | "low-mcap-gem" | "honeypot-risk";
+
+interface ScoringSignal {
+  label: string;
+  impact: "positive" | "negative" | "neutral";
+  delta: number;
+  category: "risk" | "opportunity" | "momentum" | "security" | "liquidity";
 }
 
-function secColor(score: number | null): string {
-  if (score == null) return "#6b7280";
-  if (score >= 70) return "#22c55e";
-  if (score >= 40) return "#eab308";
-  return "#ef4444";
+interface TokenScore {
+  overall: number; risk: number; opportunity: number; momentum: number;
+  liquidity: number; security: number;
+  verdict: Verdict; verdictReason: string;
+  labels: ScoreLabel[]; signals: ScoringSignal[]; confidence: number;
 }
 
-function secLabel(score: number | null): string {
-  if (score == null) return "UNKNOWN";
-  if (score >= 70) return "SAFE";
-  if (score >= 40) return "MODERATE";
-  return "RISKY";
+// ─── Scoring engine ───────────────────────────────────────────────────────────
+
+function clamp(v: number, min = 0, max = 100) { return Math.min(max, Math.max(min, v)); }
+function normalize(v: number, lo: number, hi: number) {
+  if (hi === lo) return 50;
+  return clamp(((v - lo) / (hi - lo)) * 100);
+}
+function sig(sigs: ScoringSignal[], label: string, delta: number, category: ScoringSignal["category"]) {
+  sigs.push({ label, delta, impact: delta > 0 ? "positive" : delta < 0 ? "negative" : "neutral", category });
 }
 
-// ── Sub-components ─────────────────────────────────────────────────────────
+function scoreToken(t: TokenOverview): TokenScore {
+  const pct24h   = t.priceChange24hPercent;
+  const vol24h   = t.v24hUSD;
+  const volChg   = t.v24hChangePercent ?? 0;
+  const mc       = t.mc;
+  const liq      = t.liquidity;
+  const holders  = t.holder;
+  const now      = Math.floor(Date.now() / 1000);
+  const ageMin   = t.lastTradeUnixTime ? Math.max(0, Math.floor((now - t.lastTradeUnixTime) / 60)) : 120;
 
-function SecurityRadial({ score }: { score: number | null }) {
-  const value = score ?? 0;
-  const color = secColor(score);
-  const data = [{ value, fill: color }];
-
-  return (
-    <div className="flex flex-col items-center gap-1">
-      <div className="relative w-32 h-20">
-        <ResponsiveContainer width={128} height={80}>
-          <RadialBarChart
-            cx="50%"
-            cy="100%"
-            innerRadius="70%"
-            outerRadius="100%"
-            startAngle={180}
-            endAngle={0}
-            data={data}
-          >
-            <RadialBar dataKey="value" cornerRadius={4} background={{ fill: "#1f2937" }} />
-          </RadialBarChart>
-        </ResponsiveContainer>
-        <div className="absolute inset-0 flex flex-col items-center justify-end pb-1">
-          <span className="font-mono text-lg font-bold" style={{ color }}>
-            {score != null ? score.toFixed(0) : "?"}
-          </span>
-          <span className="font-mono text-xs text-muted-foreground">/ 100</span>
-        </div>
-      </div>
-      <span className="font-mono text-xs font-semibold tracking-widest" style={{ color }}>
-        {secLabel(score)}
-      </span>
-    </div>
-  );
-}
-
-function BuySellPie({ ratio }: { ratio: number | null }) {
-  if (ratio == null) return <span className="font-mono text-xs text-muted-foreground">—</span>;
-  const buyPct = ratio * 100;
-  const sellPct = 100 - buyPct;
-  const data = [
-    { name: "BUY", value: buyPct },
-    { name: "SELL", value: sellPct },
-  ];
-  return (
-    <div className="flex items-center gap-3">
-      <div className="w-12 h-12">
-        <ResponsiveContainer width={48} height={48}>
-          <PieChart>
-            <Pie data={data} dataKey="value" cx="50%" cy="50%" innerRadius="50%" outerRadius="80%" strokeWidth={0}>
-              <Cell fill="#22c55e" />
-              <Cell fill="#ef4444" />
-            </Pie>
-          </PieChart>
-        </ResponsiveContainer>
-      </div>
-      <div className="font-mono text-xs flex flex-col gap-0.5">
-        <span className="text-buy">BUY {buyPct.toFixed(0)}%</span>
-        <span className="text-sell">SELL {sellPct.toFixed(0)}%</span>
-      </div>
-    </div>
-  );
-}
-
-function StatRow({ label, value, valueClass = "text-foreground" }: { label: string; value: string; valueClass?: string }) {
-  return (
-    <div className="flex items-center justify-between py-2 border-b border-border/50 last:border-0">
-      <span className="font-mono text-xs text-muted-foreground">{label}</span>
-      <span className={`font-mono text-xs font-semibold ${valueClass}`}>{value}</span>
-    </div>
-  );
-}
-
-function GridCard({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-lg border border-border bg-card p-4">
-      <p className="font-mono text-xs text-muted-foreground tracking-widest mb-4">{title}</p>
-      {children}
-    </div>
-  );
-}
-
-// ── OHLCV Chart ────────────────────────────────────────────────────────────
-
-function fmtTime(unix: number, timeframe: Timeframe): string {
-  const d = new Date(unix * 1000);
-  if (timeframe === "1D") {
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  // ── Liquidity ──
+  const liqSigs: ScoringSignal[] = []; const liqLabels: ScoreLabel[] = [];
+  const logLiq = liq > 0 ? Math.log10(liq) : 0;
+  let liqScore = normalize(logLiq, Math.log10(10_000), Math.log10(5_000_000));
+  if (liq < 10_000)  { liqScore = clamp(liqScore - 20); liqLabels.push("low-liquidity"); sig(liqSigs, "Critically low liquidity (< $10k)", -20, "liquidity"); }
+  else if (liq < 50_000) { sig(liqSigs, "Low liquidity (< $50k) — high slippage risk", -10, "liquidity"); liqLabels.push("low-liquidity"); }
+  else if (liq >= 1_000_000) { sig(liqSigs, "Deep liquidity (> $1M) — healthy market depth", +10, "liquidity"); }
+  if (mc > 0) {
+    const ratio = liq / mc;
+    if (ratio < 0.03)  { liqScore = clamp(liqScore - 15); sig(liqSigs, "Liquidity < 3% of market cap — rug-pull risk", -15, "liquidity"); }
+    else if (ratio >= 0.15) { sig(liqSigs, "Strong liquidity ratio (>= 15% of mcap)", +8, "liquidity"); }
   }
-  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+  liqScore = clamp(liqScore);
+
+  // ── Security (derived) ──
+  const secSigs: ScoringSignal[] = []; const secLabels: ScoreLabel[] = [];
+  let secScore = 60;
+  if (mc > 0) {
+    const r = liq / mc;
+    if (r < 0.03)  { secScore -= 20; sig(secSigs, "Liquidity < 3% of market cap — potential rug risk", -20, "security"); }
+    else if (r >= 0.10) { secScore += 10; sig(secSigs, "Healthy liquidity ratio (>= 10% of MC)", +10, "security"); }
+  }
+  if (holders < 50)   { secScore -= 20; secLabels.push("low-holders"); sig(secSigs, `Very few holders (${holders}) — high concentration risk`, -20, "security"); }
+  else if (holders < 200) { secScore -= 10; secLabels.push("low-holders"); sig(secSigs, `Low holder count (${holders}) — limited distribution`, -10, "security"); }
+  else if (holders >= 1000) { secScore += 8; sig(secSigs, `Strong holder base (${holders.toLocaleString()})`, +8, "security"); }
+  sig(secSigs, "Full security audit unavailable — showing derived signals only", 0, "security");
+  secScore = clamp(secScore);
+
+  // ── Risk ──
+  const riskSigs: ScoringSignal[] = []; const riskLabels: ScoreLabel[] = [];
+  let riskScore = secScore * 0.5 + liqScore * 0.5;
+  if (holders < 50)   { riskScore = clamp(riskScore - 20); riskLabels.push("low-holders"); sig(riskSigs, `Only ${holders} holders — very thin community`, -20, "risk"); }
+  else if (holders < 200) { riskScore = clamp(riskScore - 10); riskLabels.push("low-holders"); sig(riskSigs, `${holders} holders — limited adoption`, -10, "risk"); }
+  else if (holders >= 1000) { sig(riskSigs, `${holders.toLocaleString()} holders — healthy community`, +8, "risk"); }
+  if (ageMin < 30)    { riskScore = clamp(riskScore - 15); riskLabels.push("new-token"); sig(riskSigs, `Token is only ${ageMin}m old — very new, high risk`, -15, "risk"); }
+  else if (ageMin < 120) { riskScore = clamp(riskScore - 8); riskLabels.push("new-token"); sig(riskSigs, `Token is ${ageMin}m old — early stage`, -8, "risk"); }
+  if (pct24h < -30)   { riskScore = clamp(riskScore - 10); sig(riskSigs, `Price down ${pct24h.toFixed(1)}% in 24h — possible exit`, -10, "risk"); }
+  riskScore = clamp(riskScore);
+
+  // ── Momentum ──
+  const momSigs: ScoringSignal[] = []; const momLabels: ScoreLabel[] = [];
+  let momScore = 50;
+  if (pct24h >= 200)   { momScore += 40; momLabels.push("price-breakout"); sig(momSigs, `Price +${pct24h.toFixed(0)}% in 24h — parabolic momentum`, +40, "momentum"); }
+  else if (pct24h >= 80) { momScore += 30; momLabels.push("price-breakout"); sig(momSigs, `Price +${pct24h.toFixed(0)}% in 24h — breakout momentum`, +30, "momentum"); }
+  else if (pct24h >= 20) { momScore += 18; momLabels.push("trending"); sig(momSigs, `Price +${pct24h.toFixed(0)}% in 24h — strong uptrend`, +18, "momentum"); }
+  else if (pct24h >= 5)  { momScore += 8; sig(momSigs, `Price +${pct24h.toFixed(0)}% in 24h — mild positive`, +8, "momentum"); }
+  else if (pct24h < -30) { momScore -= 30; sig(momSigs, `Price ${pct24h.toFixed(0)}% in 24h — severe downtrend`, -30, "momentum"); }
+  else if (pct24h < -10) { momScore -= 15; sig(momSigs, `Price ${pct24h.toFixed(0)}% in 24h — downtrend`, -15, "momentum"); }
+  if (vol24h >= 20_000_000) { momScore += 20; momLabels.push("high-volume"); sig(momSigs, `$${(vol24h / 1e6).toFixed(1)}M volume — extreme activity`, +20, "momentum"); }
+  else if (vol24h >= 5_000_000) { momScore += 12; momLabels.push("high-volume"); sig(momSigs, `$${(vol24h / 1e6).toFixed(1)}M volume — high activity`, +12, "momentum"); }
+  else if (vol24h >= 500_000) { momScore += 5; sig(momSigs, `$${(vol24h / 1e3).toFixed(0)}K volume — moderate activity`, +5, "momentum"); }
+  else if (vol24h < 5_000) { momScore -= 15; sig(momSigs, "Volume < $5K — near-zero trading activity", -15, "momentum"); }
+  if (volChg > 100) { momScore += 10; momLabels.push("volume-spike"); sig(momSigs, `Volume up ${volChg.toFixed(0)}% vs yesterday — volume surge`, +10, "momentum"); }
+  else if (volChg < -50) { momScore -= 8; sig(momSigs, `Volume down ${Math.abs(volChg).toFixed(0)}% — fading interest`, -8, "momentum"); }
+  if (pct24h > 5 && volChg > 20) { momScore += 8; momLabels.push("breakout"); sig(momSigs, "Price + volume both rising — confirmed breakout signal", +8, "momentum"); }
+  else if (pct24h > 5 && volChg < -20) { momScore -= 5; sig(momSigs, "Price rising on falling volume — weak, unconfirmed move", -5, "momentum"); }
+  momScore = clamp(momScore);
+
+  // ── Opportunity ──
+  const oppSigs: ScoringSignal[] = []; const oppLabels: ScoreLabel[] = [];
+  let oppScore = momScore * 0.6 + riskScore * 0.4;
+  if (mc > 0 && mc < 500_000) { oppScore += 15; oppLabels.push("low-mcap-gem"); sig(oppSigs, `Micro-cap (${(mc / 1e3).toFixed(0)}K mcap) — high upside potential`, +15, "opportunity"); }
+  else if (mc < 5_000_000) { oppScore += 8; oppLabels.push("low-mcap-gem"); sig(oppSigs, "Small-cap — room to grow vs large caps", +8, "opportunity"); }
+  else if (mc >= 50_000_000) { oppScore -= 5; sig(oppSigs, "Large-cap — limited explosive upside", -5, "opportunity"); }
+  if (ageMin < 60 && riskScore >= 50) { oppScore += 10; sig(oppSigs, "Early entry opportunity — token < 1h old", +10, "opportunity"); }
+  if (riskScore < 30)  { oppScore = clamp(oppScore - 20); sig(oppSigs, "Very high risk significantly reduces opportunity rating", -20, "opportunity"); }
+  else if (riskScore < 50) { oppScore = clamp(oppScore - 10); sig(oppSigs, "Elevated risk discounts opportunity score", -10, "opportunity"); }
+  oppScore = clamp(oppScore);
+
+  const overall = clamp(Math.round(
+    riskScore * 0.30 + oppScore * 0.25 + momScore * 0.20 + liqScore * 0.15 + secScore * 0.10,
+  ));
+
+  const allLabels: ScoreLabel[] = Array.from(new Set([...liqLabels, ...secLabels, ...riskLabels, ...momLabels, ...oppLabels]));
+  const allSignals = [...liqSigs, ...secSigs, ...riskSigs, ...momSigs, ...oppSigs];
+
+  let verdict: Verdict; let verdictReason: string;
+  if (secScore < 25 || riskScore < 20) {
+    verdict = "AVOID"; verdictReason = "Critical security flags or critically low risk score.";
+  } else if (riskScore >= 60 && secScore >= 55 && oppScore >= 70 && momScore >= 65) {
+    verdict = "BUY"; verdictReason = "Strong opportunity signal backed by healthy risk profile and momentum.";
+  } else if (overall >= 72 && riskScore >= 55 && !allLabels.includes("low-liquidity")) {
+    verdict = "BUY"; verdictReason = "High composite score with acceptable liquidity and risk.";
+  } else if (allLabels.includes("breakout") && riskScore >= 60) {
+    verdict = "BUY"; verdictReason = "Confirmed breakout on a relatively safe token.";
+  } else if (overall < 30) {
+    verdict = "AVOID"; verdictReason = "Low composite score across all dimensions.";
+  } else {
+    verdict = "WATCH";
+    const parts: string[] = [];
+    if (oppScore >= 60) parts.push("decent opportunity upside");
+    if (riskScore >= 55) parts.push("manageable risk");
+    if (momScore >= 60) parts.push("positive momentum");
+    if (allLabels.includes("new-token")) parts.push("very new token needs monitoring");
+    verdictReason = parts.length ? `Monitor closely — ${parts.join(", ")}.` : "Mixed signals — insufficient confidence for entry.";
+  }
+
+  return {
+    overall, risk: riskScore, opportunity: oppScore, momentum: momScore,
+    liquidity: liqScore, security: secScore,
+    verdict, verdictReason, labels: allLabels, signals: allSignals, confidence: 0.5,
+  };
 }
+
+// ─── Rule-based insight ───────────────────────────────────────────────────────
+
+function buildInsight(t: TokenOverview, score: TokenScore): string {
+  const liq = t.liquidity; const pct = t.priceChange24hPercent;
+  const liqSentence =
+    liq >= 5_000_000 ? `Liquidity is excellent at $${(liq / 1e6).toFixed(1)}M — deep enough to absorb large orders without meaningful slippage.` :
+    liq >= 1_000_000 ? `Liquidity of $${(liq / 1e6).toFixed(1)}M is solid, providing reliable entry and exit depth for most position sizes.` :
+    liq >= 250_000   ? `Liquidity stands at $${(liq / 1e3).toFixed(0)}K — sufficient for small to mid-sized positions, but watch for widening spreads on larger trades.` :
+    liq >= 50_000    ? `Liquidity is thin at $${(liq / 1e3).toFixed(0)}K — even moderate buy or sell pressure can cause notable price impact.` :
+                       `Liquidity is critically low at $${(liq / 1e3).toFixed(0)}K — exit risk is very high; treat any entry with extreme caution.`;
+  const priceSentence =
+    pct >= 100 ? `Price has surged ${pct.toFixed(0)}% in the last 24h — momentum is extreme. Watch for a potential reversion after this sharp move.` :
+    pct >= 20  ? `The token is up ${pct.toFixed(0)}% in 24h, showing strong buying pressure and a confirmed uptrend.` :
+    pct >= 5   ? `A ${pct.toFixed(0)}% gain in 24h reflects healthy demand. The trend is constructive but not yet parabolic.` :
+    pct >= -5  ? `Price is essentially flat over 24h — consolidation, which can precede a breakout in either direction.` :
+    pct >= -20 ? `A ${Math.abs(pct).toFixed(0)}% decline in 24h signals selling pressure. Wait for stabilization before any entry.` :
+                 `A severe ${Math.abs(pct).toFixed(0)}% drop in 24h suggests significant distribution or loss of market confidence.`;
+  const riskSentence =
+    score.risk >= 75 ? `Overall risk profile is favourable — liquidity, holder distribution, and market metrics are all in acceptable ranges.` :
+    score.risk >= 55 ? `Risk is moderate. The token shows some concerns that warrant careful position sizing.` :
+                       `Risk is elevated. Multiple factors — including thin liquidity, concentrated supply, or very low holder count — increase the probability of adverse moves.`;
+  return `${liqSentence} ${priceSentence} ${riskSentence} Overall verdict: ${score.verdict} (score ${score.overall}/100). ${score.verdictReason}`;
+}
+
+// ─── Formatters ───────────────────────────────────────────────────────────────
 
 function fmtPrice(n: number): string {
-  if (n >= 1000) return `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-  if (n >= 1)    return `$${n.toFixed(2)}`;
-  if (n >= 0.01) return `$${n.toFixed(4)}`;
-  return `$${n.toPrecision(4)}`;
+  if (!n || !isFinite(n)) return "$0";
+  if (n < 0.000001) return `$${n.toExponential(2)}`;
+  if (n < 0.01) return `$${n.toFixed(6)}`;
+  if (n < 1) return `$${n.toFixed(4)}`;
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(n);
+}
+function fmtNum(n: number): string {
+  if (!n || !isFinite(n)) return "—";
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
+  if (abs >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (abs >= 1_000) return `${(n / 1_000).toFixed(2)}K`;
+  return n.toFixed(2);
+}
+function fmtPct(n: number): string { return `${n > 0 ? "+" : ""}${n.toFixed(2)}%`; }
+function fmtAddr(a: string, c = 4): string { return a.length < c * 2 + 3 ? a : `${a.slice(0, c)}...${a.slice(-c)}`; }
+function pctColor(n: number): string { return n > 0 ? "text-buy" : n < 0 ? "text-sell" : "text-muted-foreground"; }
+function scoreTextColor(n: number): string { return n >= 75 ? "text-buy" : n >= 50 ? "text-yellow-400" : "text-sell"; }
+function scoreBarColor(n: number): string { return n >= 75 ? "bg-buy" : n >= 50 ? "bg-yellow-400" : "bg-sell"; }
+function scoreRating(n: number): string { return n >= 75 ? "HIGH" : n >= 50 ? "MED" : "LOW"; }
+
+// ─── Sparkline ────────────────────────────────────────────────────────────────
+
+function generateSparkPath(priceChange: number, volume: number, w = 300, h = 64): string {
+  const pts = 14; const step = w / (pts - 1); const seed = Math.abs(volume % 998) + 1;
+  const ys: number[] = []; let cur = h * 0.5;
+  for (let i = 0; i < pts; i++) {
+    const trend = (priceChange / 100) * h * 0.3;
+    const noise = ((((seed * (i + 1) * 17) % 100) / 100) - 0.5) * h * 0.4;
+    cur = Math.max(4, Math.min(h - 4, cur + trend / pts + noise));
+    ys.push(cur);
+  }
+  return ys.map((y, i) => `${i === 0 ? "M" : "L"}${(i * step).toFixed(1)},${y.toFixed(1)}`).join(" ");
 }
 
-type ChartTooltipProps = {
-  active?: boolean;
-  payload?: Array<{ value: number; payload: OhlcvCandle }>;
-  label?: number;
-  timeframe: Timeframe;
-};
-
-function ChartTooltip({ active, payload, label, timeframe }: ChartTooltipProps) {
-  if (!active || !payload?.length || label == null) return null;
-  const candle = payload[0].payload;
+function Sparkline({ priceChange, volume }: { priceChange: number; volume: number }) {
+  const W = 300; const H = 64;
+  const path  = generateSparkPath(priceChange, volume, W, H);
+  const color = priceChange >= 0 ? "#00A86B" : "#DC2626";
   return (
-    <div className="rounded-lg border border-border bg-card shadow-xl px-3 py-2 font-mono text-xs">
-      <p className="text-muted-foreground mb-1">{fmtTime(label, timeframe)}</p>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
-        <span className="text-muted-foreground">O</span><span className="text-foreground">{fmtPrice(candle.open)}</span>
-        <span className="text-muted-foreground">H</span><span className="text-buy">{fmtPrice(candle.high)}</span>
-        <span className="text-muted-foreground">L</span><span className="text-sell">{fmtPrice(candle.low)}</span>
-        <span className="text-muted-foreground">C</span><span className="text-foreground font-bold">{fmtPrice(candle.close)}</span>
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="spark-fill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.25" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={`${path} L${W},${H} L0,${H} Z`} fill="url(#spark-fill)" />
+      <path d={path} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+function StatCard({ label, value, sub, icon, change }: {
+  label: string; value: string; sub?: string; icon: React.ReactNode; change?: number;
+}) {
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg">
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">{label}</span>
+        <span className="text-muted-foreground">{icon}</span>
+      </div>
+      <div>
+        <p className="font-mono text-xl font-bold text-foreground">{value}</p>
+        {sub && <p className="mt-0.5 font-mono text-xs text-muted-foreground">{sub}</p>}
+        {change !== undefined && <p className={`mt-0.5 font-mono text-xs font-semibold ${pctColor(change)}`}>{fmtPct(change)} 24h</p>}
       </div>
     </div>
   );
 }
 
-function OhlcvChart({
-  candles,
-  whaleBuys,
-  timeframe,
-}: {
-  candles: OhlcvCandle[];
-  whaleBuys: WhaleBuy[];
-  timeframe: Timeframe;
-}) {
-  if (!candles.length) {
+function ScoreCard({ label, score, description }: { label: string; score: number; description: string }) {
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-foreground">{label}</span>
+        <span className={`font-mono text-lg font-bold tabular-nums ${scoreTextColor(score)}`}>{score}</span>
+      </div>
+      <div>
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className={`font-mono text-[10px] font-bold ${scoreTextColor(score)}`}>{score}/100</span>
+          <span className={`font-mono text-[10px] font-semibold uppercase tracking-widest ${scoreTextColor(score)}`}>{scoreRating(score)}</span>
+        </div>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <div className={`h-full rounded-full transition-[width] duration-700 ${scoreBarColor(score)}`} style={{ width: `${score}%` }} />
+        </div>
+      </div>
+      <p className="font-mono text-[10px] leading-relaxed text-muted-foreground">{description}</p>
+    </div>
+  );
+}
+
+type VerdictStyle = { border: string; bg: string; text: string; icon: React.ReactNode };
+const VERDICT_STYLES: Record<Verdict, VerdictStyle> = {
+  BUY:   { border: "border-buy/30",        bg: "bg-buy/5",        text: "text-buy",        icon: <CheckCircle2 className="h-5 w-5" /> },
+  WATCH: { border: "border-yellow-400/30", bg: "bg-yellow-400/5", text: "text-yellow-400", icon: <AlertTriangle className="h-5 w-5" /> },
+  AVOID: { border: "border-sell/30",       bg: "bg-sell/5",       text: "text-sell",       icon: <XCircle className="h-5 w-5" /> },
+};
+
+function VerdictBanner({ score }: { score: TokenScore }) {
+  const s = VERDICT_STYLES[score.verdict];
+  return (
+    <div className={`flex items-start gap-3 rounded-xl border p-4 ${s.border} ${s.bg}`}>
+      <span className={s.text}>{s.icon}</span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`text-sm font-bold ${s.text}`}>{score.verdict}</span>
+          <span className="text-xs text-muted-foreground">·</span>
+          <span className="text-xs text-muted-foreground">Score: <span className={`font-mono font-bold ${s.text}`}>{score.overall}</span></span>
+          <span className="text-xs text-muted-foreground">·</span>
+          <span className="text-xs text-muted-foreground">Confidence: {Math.round(score.confidence * 100)}%</span>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">{score.verdictReason}</p>
+      </div>
+    </div>
+  );
+}
+
+const LABEL_STYLES: Record<ScoreLabel, string> = {
+  "high-risk": "border-sell/30 bg-sell/10 text-sell", "low-liquidity": "border-yellow-400/30 bg-yellow-400/10 text-yellow-400",
+  "new-token": "border-cyan/30 bg-cyan/10 text-cyan", "trending": "border-cyan/30 bg-cyan/10 text-cyan",
+  "breakout": "border-buy/30 bg-buy/10 text-buy", "whale-activity": "border-yellow-400/30 bg-yellow-400/10 text-yellow-400",
+  "low-holders": "border-sell/30 bg-sell/10 text-sell", "high-volume": "border-buy/30 bg-buy/10 text-buy",
+  "concentrated-supply": "border-sell/30 bg-sell/10 text-sell", "lp-burned": "border-buy/30 bg-buy/10 text-buy",
+  "mintable": "border-sell/30 bg-sell/10 text-sell", "freezeable": "border-sell/30 bg-sell/10 text-sell",
+  "transfer-fee": "border-yellow-400/30 bg-yellow-400/10 text-yellow-400", "mutable-metadata": "border-yellow-400/30 bg-yellow-400/10 text-yellow-400",
+  "volume-spike": "border-cyan/30 bg-cyan/10 text-cyan", "price-breakout": "border-buy/30 bg-buy/10 text-buy",
+  "low-mcap-gem": "border-cyan/30 bg-cyan/10 text-cyan", "honeypot-risk": "border-sell/30 bg-sell/10 text-sell",
+};
+
+function AIPanel({ insight }: { insight: string }) {
+  return (
+    <div className="rounded-xl border border-cyan/20 bg-cyan/5 p-5 ring-1 ring-cyan/10">
+      <div className="mb-3 flex items-center gap-2">
+        <Sparkles className="h-4 w-4 text-cyan" />
+        <span className="text-sm font-semibold text-cyan">AI Insight</span>
+        <span className="inline-flex items-center rounded-full border border-border bg-muted/60 px-2 py-0.5 font-mono text-[9px] font-bold text-muted-foreground">
+          Rule-based
+        </span>
+      </div>
+      <p className="text-sm leading-relaxed text-muted-foreground">{insight}</p>
+    </div>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
+export default function TokenDetailPage() {
+  const params  = useParams();
+  const address = typeof params.address === "string" ? params.address : (Array.isArray(params.address) ? params.address[0] : "");
+
+  const [token, setToken]     = useState<TokenOverview | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState<string | null>(null);
+
+  const fetchToken = useCallback(async () => {
+    if (!address) return;
+    setLoading(true); setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/tokens/${address}/overview`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setToken(await res.json());
+    } catch (e) { setError(String(e)); }
+    finally { setLoading(false); }
+  }, [address]);
+
+  useEffect(() => {
+    const id = setTimeout(() => {
+      void fetchToken();
+    }, 0);
+    return () => clearTimeout(id);
+  }, [fetchToken]);
+
+  // ── Loading ──
+  if (loading) {
     return (
-      <div className="flex items-center justify-center h-48 font-mono text-xs text-muted-foreground">
-        No price data available
+      <div className="min-h-screen flex flex-col">
+        <NavBar />
+        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6 space-y-6">
+          <div className="h-4 w-32 animate-pulse rounded bg-muted" />
+          <div className="h-52 animate-pulse rounded-xl bg-card" />
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            {Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-card" />)}
+          </div>
+          <div className="h-28 animate-pulse rounded-xl bg-card" />
+          <div className="h-96 animate-pulse rounded-xl bg-card" />
+        </main>
       </div>
     );
   }
 
-  // Compute domain with 3% padding
-  const closes = candles.map((c) => c.close);
-  const minClose = Math.min(...closes);
-  const maxClose = Math.max(...closes);
-  const pad = (maxClose - minClose) * 0.06;
-  const domainMin = minClose - pad;
-  const domainMax = maxClose + pad;
-
-  const isUp = candles[candles.length - 1].close >= candles[0].open;
-  const strokeColor = isUp ? "#00A86B" : "#DC2626";
-  const fillStart = isUp ? "rgba(0,168,107,0.18)" : "rgba(220,38,38,0.18)";
-
-  // Match whale buys to nearest candle time
-  const candleSet = new Set(candles.map((c) => c.time));
-  const whaleMarkers = whaleBuys.filter((w) => {
-    // Find nearest candle within the chart range
-    const inRange = w.time >= candles[0].time && w.time <= candles[candles.length - 1].time;
-    return inRange;
-  });
-
-  return (
-    <ResponsiveContainer width="100%" height={220}>
-      <AreaChart data={candles} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-        <defs>
-          <linearGradient id="priceGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={strokeColor} stopOpacity={0.25} />
-            <stop offset="100%" stopColor={strokeColor} stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        <CartesianGrid
-          strokeDasharray="3 3"
-          stroke="rgba(255,255,255,0.05)"
-          vertical={false}
-        />
-        <XAxis
-          dataKey="time"
-          tickFormatter={(v) => fmtTime(v, timeframe)}
-          tick={{ fontFamily: "monospace", fontSize: 10, fill: "#60608A" }}
-          axisLine={false}
-          tickLine={false}
-          interval="preserveStartEnd"
-          minTickGap={40}
-        />
-        <YAxis
-          domain={[domainMin, domainMax]}
-          tickFormatter={fmtPrice}
-          tick={{ fontFamily: "monospace", fontSize: 10, fill: "#60608A" }}
-          axisLine={false}
-          tickLine={false}
-          width={64}
-          tickCount={5}
-        />
-        <Tooltip content={<ChartTooltip timeframe={timeframe} />} />
-        {/* Whale buy markers */}
-        {whaleMarkers.map((w, i) => (
-          <ReferenceLine
-            key={i}
-            x={w.time}
-            stroke={w.smart_money ? "#0891B2" : "#F59E0B"}
-            strokeWidth={1.5}
-            strokeDasharray="4 2"
-            label={{
-              value: "🐋",
-              position: "top",
-              fontSize: 11,
-              fontFamily: "monospace",
-            }}
-          />
-        ))}
-        <Area
-          type="monotone"
-          dataKey="close"
-          stroke={strokeColor}
-          strokeWidth={2}
-          fill="url(#priceGrad)"
-          dot={false}
-          activeDot={{ r: 4, strokeWidth: 0, fill: strokeColor }}
-        />
-      </AreaChart>
-    </ResponsiveContainer>
-  );
-}
-
-function Skeleton() {
-  return (
-    <div className="animate-pulse flex flex-col gap-4">
-      <div className="h-8 bg-border rounded w-1/3" />
-      <div className="h-4 bg-border rounded w-1/4" />
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
-        {[...Array(4)].map((_, i) => (
-          <div key={i} className="h-40 bg-border rounded-lg" />
-        ))}
+  // ── Error ──
+  if (error || !token) {
+    return (
+      <div className="min-h-screen flex flex-col">
+        <NavBar />
+        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6 space-y-6">
+          <Link href="/dashboard" className="inline-flex items-center gap-1.5 font-mono text-sm text-muted-foreground transition-colors hover:text-foreground">
+            <ArrowLeft className="h-4 w-4" /> Back to Dashboard
+          </Link>
+          <div className="flex flex-col items-center gap-4 rounded-xl border border-sell/20 bg-sell/5 py-20 text-center">
+            <ShieldOff className="h-10 w-10 text-sell" />
+            <div>
+              <p className="font-semibold text-sell">Token data unavailable</p>
+              <p className="mt-1 max-w-xs font-mono text-sm text-muted-foreground">
+                This token may not yet be indexed, or the API is temporarily unavailable.
+              </p>
+              <p className="mt-2 break-all font-mono text-xs text-muted-foreground">{address}</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <button onClick={fetchToken} className="rounded-lg border border-border bg-card px-4 py-2 font-mono text-sm text-muted-foreground transition-colors hover:text-foreground">
+                Retry
+              </button>
+              <Link href="/dashboard" className="rounded-lg bg-muted px-4 py-2 font-mono text-sm text-muted-foreground transition-colors hover:text-foreground">
+                Return to Dashboard
+              </Link>
+            </div>
+          </div>
+        </main>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
-// ── Page ───────────────────────────────────────────────────────────────────
+  const score   = scoreToken(token);
+  const insight = buildInsight(token, score);
 
-export default function TokenPage() {
-  const params = useParams();
-  const address = params.address as string;
+  const LINKS = [
+    { href: `https://solscan.io/token/${address}`,              label: "Solscan" },
+    { href: `https://dexscreener.com/solana/${address}`,        label: "DexScreener" },
+    { href: `https://birdeye.so/token/${address}?chain=solana`, label: "Birdeye" },
+  ];
 
-  const [report, setReport] = useState<MiniReport | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  // Chart state
-  const [timeframe, setTimeframe] = useState<Timeframe>("7D");
-  const [candles, setCandles] = useState<OhlcvCandle[]>([]);
-  const [whaleBuys, setWhaleBuys] = useState<WhaleBuy[]>([]);
-  const [chartLoading, setChartLoading] = useState(false);
-
-  const fetchReport = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    fetch(`${API_BASE}/api/tokens/${address}/mini-report`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then(setReport)
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [address]);
-
-  const fetchChart = useCallback(
-    (tf: Timeframe) => {
-      setChartLoading(true);
-      Promise.all([
-        fetch(`${API_BASE}/api/tokens/${address}/ohlcv?timeframe=${tf}`).then((r) =>
-          r.ok ? r.json() : []
-        ),
-        fetch(`${API_BASE}/api/tokens/${address}/whale-buys`).then((r) =>
-          r.ok ? r.json() : []
-        ),
-      ])
-        .then(([c, w]) => {
-          setCandles(c as OhlcvCandle[]);
-          setWhaleBuys(w as WhaleBuy[]);
-        })
-        .catch(() => {
-          setCandles([]);
-          setWhaleBuys([]);
-        })
-        .finally(() => setChartLoading(false));
-    },
-    [address]
-  );
-
-  useEffect(() => {
-    if (address) {
-      fetchReport();
-      fetchChart("7D");
-    }
-  }, [address, fetchReport, fetchChart]);
-
-  const handleTimeframe = (tf: Timeframe) => {
-    setTimeframe(tf);
-    fetchChart(tf);
-  };
-
-  const symbol = report?.symbol || address.slice(0, 8);
-  const momColor =
-    report?.momentum_24h == null
-      ? "text-muted-foreground"
-      : report.momentum_24h >= 0
-      ? "text-buy"
-      : "text-sell";
+  const heroBorder = score.verdict === "BUY" ? "border-buy/30" : score.verdict === "AVOID" ? "border-sell/30" : "border-border";
 
   return (
     <div className="min-h-screen flex flex-col">
       <NavBar />
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6 space-y-6">
 
-      <main className="flex-1 px-4 sm:px-6 py-8 max-w-4xl mx-auto w-full">
-        {/* Breadcrumb */}
-        <div className="flex items-center gap-2 font-mono text-xs text-muted-foreground mb-6">
-          <Link href="/" className="hover:text-foreground transition-colors">HOME</Link>
-          <span>/</span>
-          <Link href="/live" className="hover:text-foreground transition-colors">LIVE FEED</Link>
-          <span>/</span>
-          <span className="text-foreground">{symbol}</span>
+        {/* ── Back ─── */}
+        <Link href="/dashboard" className="inline-flex items-center gap-1.5 font-mono text-sm text-muted-foreground transition-colors hover:text-foreground">
+          <ArrowLeft className="h-4 w-4" /> Back to Dashboard
+        </Link>
+
+        {/* ── Hero card ─── */}
+        <div className={`flex flex-col gap-5 rounded-xl border bg-card p-6 sm:flex-row sm:items-start ${heroBorder}`}>
+          {/* Logo */}
+          <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-2xl bg-muted">
+            <span className="absolute inset-0 flex items-center justify-center text-lg font-bold text-muted-foreground">
+              {token.symbol.slice(0, 2).toUpperCase()}
+            </span>
+            {token.logoURI && (
+              <Image src={token.logoURI} alt={token.symbol} fill unoptimized className="rounded-2xl object-cover" />
+            )}
+          </div>
+          {/* Info */}
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-2xl font-bold text-foreground">{token.name}</h1>
+              <span className="font-mono text-base text-muted-foreground">{token.symbol}</span>
+              <span className="inline-flex items-center rounded-full border border-cyan/20 bg-cyan/10 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-cyan">
+                Solana
+              </span>
+              {score.verdict === "BUY" && (
+                <span className="inline-flex items-center rounded-full border border-buy/20 bg-buy/10 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-buy">BUY</span>
+              )}
+              {score.verdict === "AVOID" && (
+                <span className="inline-flex items-center rounded-full border border-sell/20 bg-sell/10 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-sell">AVOID</span>
+              )}
+              {score.verdict === "WATCH" && (
+                <span className="inline-flex items-center rounded-full border border-yellow-400/20 bg-yellow-400/10 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-yellow-400">WATCH</span>
+              )}
+            </div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+              <span className="font-mono">{fmtAddr(address, 8)}</span>
+              {LINKS.map((lnk) => (
+                <a key={lnk.href} href={lnk.href} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-0.5 text-muted-foreground transition-colors hover:text-cyan">
+                  {lnk.label} <ExternalLink className="h-3 w-3" />
+                </a>
+              ))}
+            </div>
+            {/* Sparkline + price */}
+            <div className="mt-4 flex items-end gap-4">
+              <div className="min-w-0 flex-1">
+                <Sparkline priceChange={token.priceChange24hPercent} volume={token.v24hUSD} />
+              </div>
+              <div className="shrink-0 text-right">
+                <p className="font-mono text-2xl font-bold text-foreground">{fmtPrice(token.price)}</p>
+                <p className={`font-mono text-sm font-bold ${pctColor(token.priceChange24hPercent)}`}>
+                  {fmtPct(token.priceChange24hPercent)} 24h
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
 
-        {loading ? (
-          <Skeleton />
-        ) : error ? (
-          <div className="rounded-lg border border-border bg-card p-10 text-center flex flex-col items-center gap-4">
-            <p className="font-mono text-sm text-muted-foreground">Failed to load token data — {error}</p>
-            <button
-              onClick={fetchReport}
-              className="font-mono text-xs border border-border rounded px-4 py-2 hover:text-foreground hover:border-foreground/50 transition-colors text-muted-foreground"
-            >
-              RETRY
-            </button>
+        {/* ── Verdict banner ─── */}
+        <VerdictBanner score={score} />
+
+        {/* ── Key metrics ─── */}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <StatCard label="Volume 24h"   value={`$${fmtNum(token.v24hUSD)}`}       change={token.v24hChangePercent} icon={<BarChart2 className="h-4 w-4" />} />
+          <StatCard label="Market Cap"   value={`$${fmtNum(token.mc)}`}             icon={<TrendingUp className="h-4 w-4" />} />
+          <StatCard label="Liquidity"    value={`$${fmtNum(token.liquidity)}`}      icon={<Droplets className="h-4 w-4" />} />
+          <StatCard label="Holders"      value={token.holder.toLocaleString()}      icon={<Users className="h-4 w-4" />} />
+          <StatCard label="Circulating"  value={fmtNum(token.circulatingSupply)}    sub={`of ${fmtNum(token.supply)} total`} icon={<Zap className="h-4 w-4" />} />
+          <StatCard label="Real Mkt Cap" value={`$${fmtNum(token.realMc)}`}         icon={<BarChart2 className="h-4 w-4" />} />
+        </div>
+
+        {/* ── AI insight ─── */}
+        <AIPanel insight={insight} />
+
+        {/* ── Chart ─── */}
+        <section>
+          <div className="mb-3 flex items-center gap-2">
+            <CandlestickChart className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold text-foreground">Price Chart</h2>
           </div>
-        ) : !report ? null : (
-          <>
-            {/* Hero */}
-            <div className="mb-8">
-              <div className="flex items-center gap-4 flex-wrap">
-                <h1 className="font-mono text-2xl font-bold text-foreground tracking-wider">
-                  ${symbol}
-                </h1>
-                {report.momentum_24h != null && (
-                  <span className={`font-mono text-sm font-semibold ${momColor}`}>
-                    {report.momentum_24h >= 0 ? "▲" : "▼"}{" "}
-                    {report.momentum_24h >= 0 ? "+" : ""}
-                    {report.momentum_24h.toFixed(2)}%
-                  </span>
-                )}
-                {report.smart_money_flag && (
-                  <span className="font-mono text-xs text-cyan border border-cyan/30 rounded px-2 py-0.5">
-                    ◆ SMART MONEY
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-6 mt-2 flex-wrap">
-                {report.price != null && (
-                  <span className="font-mono text-sm text-muted-foreground">
-                    PRICE <span className="text-foreground font-semibold">{fmtUsd(report.price)}</span>
-                  </span>
-                )}
-                {report.market_cap != null && (
-                  <span className="font-mono text-sm text-muted-foreground">
-                    MCAP <span className="text-foreground font-semibold">{fmtUsd(report.market_cap)}</span>
-                  </span>
-                )}
-              </div>
-              <div className="mt-2 font-mono text-xs text-muted-foreground break-all">
-                {address}
-              </div>
+          <OHLCVChart address={address} symbol={token.symbol} />
+        </section>
+
+        {/* ── Score breakdown ─── */}
+        <section>
+          <div className="mb-3 flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold text-foreground">Score Breakdown</h2>
+            <span className="font-mono text-xs text-muted-foreground">
+              Composite: <span className={`font-bold ${scoreTextColor(score.overall)}`}>{score.overall}/100</span>
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            <ScoreCard label="Risk"        score={score.risk}        description="Higher = safer. Factors in age, holder count, and liquidity floor." />
+            <ScoreCard label="Opportunity" score={score.opportunity} description="Upside potential from price action, market cap, and momentum." />
+            <ScoreCard label="Momentum"    score={score.momentum}    description="Volume trend, price acceleration, and buy/sell confirmation." />
+            <ScoreCard label="Liquidity"   score={score.liquidity}   description="Depth of on-chain pools — determines entry and exit ease." />
+            <ScoreCard label="Security"    score={score.security}    description="Derived from holder count and liquidity ratio. On-chain audit coming soon." />
+          </div>
+        </section>
+
+        {/* ── Security panel (coming soon) ─── */}
+        <section>
+          <div className="mb-3 flex items-center gap-2">
+            <ShieldAlert className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold text-foreground">Security Flags</h2>
+            <span className="inline-flex items-center rounded-full border border-border bg-muted/60 px-2 py-0.5 font-mono text-[9px] font-bold text-muted-foreground">
+              Coming Soon
+            </span>
+          </div>
+          <div className="flex flex-col items-center gap-4 rounded-xl border border-border bg-card px-6 py-10 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-border bg-muted">
+              <ShieldOff className="h-6 w-6 text-muted-foreground" />
             </div>
-
-            {/* 2×2 Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-              {/* Security */}
-              <GridCard title="SECURITY">
-                <div className="flex flex-col items-center gap-4">
-                  <SecurityRadial score={report.security_score} />
-                  <div className="w-full">
-                    <StatRow
-                      label="HONEYPOT"
-                      value={report.is_honeypot == null ? "—" : report.is_honeypot ? "YES ⚠" : "CLEAN ✓"}
-                      valueClass={report.is_honeypot ? "text-sell" : "text-buy"}
-                    />
-                    <StatRow
-                      label="SMART MONEY"
-                      value={report.smart_money_flag ? "YES ✓" : "NO"}
-                      valueClass={report.smart_money_flag ? "text-cyan" : "text-muted-foreground"}
-                    />
-                  </div>
-                </div>
-              </GridCard>
-
-              {/* Market */}
-              <GridCard title="MARKET">
-                <StatRow label="PRICE" value={report.price != null ? fmtUsd(report.price) : "—"} />
-                <StatRow label="MARKET CAP" value={fmtUsd(report.market_cap)} />
-                <StatRow label="24H VOLUME" value={fmtUsd(report.volume_24h)} />
-                <StatRow
-                  label="24H MOMENTUM"
-                  value={
-                    report.momentum_24h != null
-                      ? `${report.momentum_24h >= 0 ? "+" : ""}${report.momentum_24h.toFixed(2)}%`
-                      : "—"
-                  }
-                  valueClass={momColor}
-                />
-              </GridCard>
-
-              {/* Liquidity & Holders */}
-              <GridCard title="LIQUIDITY & HOLDERS">
-                <StatRow label="TOTAL LIQUIDITY" value={fmtUsd(report.total_liquidity_usd)} />
-                <StatRow label="HOLDER COUNT" value={fmtNum(report.holder_count)} />
-                <div className="pt-3">
-                  <p className="font-mono text-xs text-muted-foreground mb-2">BUY / SELL SPLIT</p>
-                  <BuySellPie ratio={report.buy_sell_ratio} />
-                </div>
-              </GridCard>
-
-              {/* Risk Overview */}
-              <GridCard title="RISK OVERVIEW">
-                <div className="flex flex-col gap-3">
-                  {/* Score bar */}
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="font-mono text-xs text-muted-foreground">SCORE</span>
-                      <span className="font-mono text-xs" style={{ color: secColor(report.security_score) }}>
-                        {report.security_score != null ? `${report.security_score.toFixed(0)}/100` : "—"}
-                      </span>
-                    </div>
-                    <div className="h-1.5 rounded-full bg-border overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{
-                          width: `${report.security_score ?? 0}%`,
-                          backgroundColor: secColor(report.security_score),
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Color legend */}
-                  <div className="flex flex-wrap items-center gap-3 font-mono text-xs text-muted-foreground">
-                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-sell inline-block" /> 0-40 RISKY</span>
-                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-500 inline-block" /> 40-70 OK</span>
-                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-buy inline-block" /> 70+ SAFE</span>
-                  </div>
-
-                  <div className="pt-1">
-                    <StatRow
-                      label="RISK RATING"
-                      value={secLabel(report.security_score)}
-                      valueClass={
-                        report.security_score == null
-                          ? "text-muted-foreground"
-                          : report.security_score >= 70
-                          ? "text-buy"
-                          : report.security_score >= 40
-                          ? "text-yellow-400"
-                          : "text-sell"
-                      }
-                    />
-                  </div>
-                </div>
-              </GridCard>
+            <div>
+              <p className="text-sm font-semibold text-foreground">On-chain Security Audit — Coming Soon</p>
+              <p className="mt-1 max-w-xs font-mono text-xs leading-relaxed text-muted-foreground">
+                Mint authority, freeze authority, LP burn status, and transfer fee scanning require a higher API tier and will be available in a future update.
+              </p>
             </div>
+          </div>
+        </section>
 
-            {/* ── OHLCV Price Chart ─────────────────────────────────────── */}
-            <div className="rounded-lg border border-border bg-card p-4 mb-6">
-              {/* Header row */}
-              <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-                <div className="flex items-center gap-3">
-                  <p className="font-mono text-xs text-muted-foreground tracking-widest">PRICE CHART</p>
-                  {whaleBuys.length > 0 && (
-                    <span className="font-mono text-xs text-cyan border border-cyan/30 rounded px-2 py-0.5">
-                      🐋 {whaleBuys.length} whale buy{whaleBuys.length !== 1 ? "s" : ""}
-                    </span>
-                  )}
-                </div>
-                {/* Timeframe toggle */}
-                <div className="flex items-center gap-1 bg-muted/40 rounded-md p-0.5">
-                  {(["1D", "7D", "30D"] as Timeframe[]).map((tf) => (
-                    <button
-                      key={tf}
-                      onClick={() => handleTimeframe(tf)}
-                      className={`font-mono text-xs px-3 py-1 rounded transition-all duration-150 ${
-                        timeframe === tf
-                          ? "bg-card text-foreground shadow-sm border border-border/60"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      {tf}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Chart */}
-              {chartLoading ? (
-                <div className="h-56 flex items-center justify-center">
-                  <div className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
-                    <span className="h-2 w-2 rounded-full bg-buy animate-pulse" />
-                    LOADING CHART...
-                  </div>
-                </div>
-              ) : (
-                <OhlcvChart candles={candles} whaleBuys={whaleBuys} timeframe={timeframe} />
-              )}
-
-              {/* Legend */}
-              {whaleBuys.length > 0 && (
-                <div className="flex items-center gap-4 mt-3 pt-3 border-t border-border/40">
-                  <span className="font-mono text-xs text-muted-foreground">MARKERS:</span>
-                  <span className="flex items-center gap-1.5 font-mono text-xs text-cyan">
-                    <span className="inline-block w-4 border-t-2 border-dashed border-cyan" /> Smart money buy
-                  </span>
-                  <span className="flex items-center gap-1.5 font-mono text-xs text-yellow-400">
-                    <span className="inline-block w-4 border-t-2 border-dashed border-yellow-400" /> Whale buy
-                  </span>
-                </div>
-              )}
+        {/* ── Detected labels ─── */}
+        {score.labels.length > 0 && (
+          <section>
+            <div className="mb-3 flex items-center gap-2">
+              <Zap className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-sm font-semibold text-foreground">Detected Labels</h2>
             </div>
-
-            {/* Links */}
-            <div className="flex flex-wrap gap-3">
-              <a
-                href={`https://solscan.io/token/${address}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-mono text-xs text-muted-foreground hover:text-cyan border border-border hover:border-cyan/40 rounded px-4 py-2 transition-colors"
-              >
-                SOLSCAN →
-              </a>
-              <a
-                href={`https://jup.ag/swap/SOL-${address}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-mono text-xs text-muted-foreground hover:text-buy border border-border hover:border-buy/40 rounded px-4 py-2 transition-colors"
-              >
-                TRADE ON JUPITER →
-              </a>
-              <button
-                onClick={() => navigator.clipboard.writeText(address)}
-                className="font-mono text-xs text-muted-foreground hover:text-foreground border border-border rounded px-4 py-2 transition-colors"
-              >
-                COPY ADDRESS
-              </button>
+            <div className="flex flex-wrap gap-1.5">
+              {score.labels.map((lbl) => (
+                <span key={lbl} className={`inline-flex items-center rounded-full border px-2.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider ${LABEL_STYLES[lbl]}`}>
+                  {lbl}
+                </span>
+              ))}
             </div>
-          </>
+          </section>
         )}
+
+        {/* ── Scoring signals ─── */}
+        <section>
+          <div className="mb-3 flex items-center gap-2">
+            <BarChart2 className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold text-foreground">Scoring Signals</h2>
+            <span className="font-mono text-xs text-muted-foreground">{score.signals.length} signals</span>
+          </div>
+          <div className="overflow-hidden rounded-xl border border-border bg-card">
+            <div className="divide-y divide-border/50">
+              {score.signals.map((s, i) => (
+                <div key={i} className="flex items-start gap-3 px-4 py-3">
+                  <span className={`mt-0.5 w-10 shrink-0 font-mono text-[10px] font-bold tabular-nums ${s.impact === "positive" ? "text-buy" : s.impact === "negative" ? "text-sell" : "text-muted-foreground"}`}>
+                    {s.delta > 0 ? "+" : ""}{s.delta}
+                  </span>
+                  <p className="flex-1 text-sm text-muted-foreground">{s.label}</p>
+                  <span className="shrink-0 inline-flex items-center rounded-full border border-border bg-muted/60 px-2 py-0.5 font-mono text-[9px] font-bold text-muted-foreground">
+                    {s.category}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
       </main>
     </div>
   );

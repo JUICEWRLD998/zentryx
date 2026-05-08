@@ -231,9 +231,9 @@ async def send_trade_alert_ai_followup(
     recommendation: str,
     analysis: str,
 ) -> None:
-    """Send a follow-up AI verdict message to the group/channel after the initial alert."""
+    """Send a follow-up AI verdict message to the personal bot after the initial alert."""
     bot = _get_bot()
-    chat_id = _group_chat_id()
+    chat_id = _chat_id()
     if not bot or not chat_id:
         return
 
