@@ -18,6 +18,7 @@ Supported commands (user types in the Telegram chat):
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import os
 import time
@@ -1475,7 +1476,13 @@ async def _handle_new_listings(bot: Bot, update: Update) -> None:
     try:
         from services import birdeye
         raw = await birdeye.get_new_listings(limit=5, offset=0)
-        tokens = (raw.get("data") or {}).get("items") or []
+        data = raw.get("data") or []
+        if isinstance(data, dict):
+            tokens = data.get("items") or []
+        elif isinstance(data, list):
+            tokens = data
+        else:
+            tokens = []
     except Exception as exc:
         await bot.send_message(chat_id=chat_id, text=f"❌ Failed to fetch new listings: {exc}", parse_mode="HTML")
         return
@@ -1488,14 +1495,18 @@ async def _handle_new_listings(bot: Bot, update: Update) -> None:
     for idx, token in enumerate(tokens[:5], start=1):
         addr = token.get("address") or ""
         symbol = token.get("symbol") or addr[:8]
+        name = token.get("name") or token.get("tokenName") or "Unknown Token"
         price = token.get("price") or 0
         pct = token.get("priceChange24hPercent") or token.get("price24hChangePercent") or 0
         pct_str = f"{pct:+.2f}%" if pct else "—"
         pct_emoji = "🟢" if pct > 0 else ("🔴" if pct < 0 else "⬜")
         price_str = f"${price:.6g}" if price and price < 1 else (f"${price:,.4f}" if price else "—")
         birdeye_url = f"https://birdeye.so/token/{addr}?chain=solana"
+        safe_symbol = html.escape(str(symbol), quote=False)
+        safe_name = html.escape(str(name), quote=False)
         lines.append(
-            f"#{idx} <b>${symbol}</b>  <code>{price_str}</code>\n"
+            f"#{idx} <b>${safe_symbol}</b> — {safe_name}\n"
+            f"Price: <code>{price_str}</code>\n"
             f"24h: {pct_emoji} <b>{pct_str}</b> • <a href='{birdeye_url}'>View chart</a>"
         )
 
