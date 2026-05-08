@@ -302,7 +302,10 @@ function PortfolioXRay({
               <Tooltip
                 cursor={{ fill: "transparent" }}
                 contentStyle={{ background: "#0A0A1A", border: "1px solid #1E1E3A", fontFamily: "JetBrains Mono, monospace", fontSize: 11 }}
-                formatter={(v: number) => [`$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, "Value"]}
+                formatter={(value) => {
+                  const amount = typeof value === "number" ? value : Number(value ?? 0);
+                  return [`$${amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, "Value"];
+                }}
               />
               <Bar dataKey="value" radius={[0, 3, 3, 0]}>
                 {chartData.map((_, i) => (
