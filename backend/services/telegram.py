@@ -22,7 +22,7 @@ import logging
 import os
 import time
 
-from telegram import Bot, BotCommand, Update
+from telegram import Bot, BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeDefault, Update
 from telegram.error import TelegramError
 from sqlalchemy import select, delete
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -492,6 +492,8 @@ async def _handle_start(bot: Bot, update: Update) -> None:
         "/analyze [token] — AI deep-dive analysis via Groq\n"
         "/track [token] [tp%] [sl%] — open a paper trade\n"
         "/my-trades — view your paper trade positions\n"
+        "/trending — top 5 trending Solana tokens\n"
+        "/newlisting — 5 newest token launches\n"
         "/help — show this message\n\n"
         "🔔 Trade alerts fire automatically when whales move $1,000+.\n"
         "📩 Watchlist alerts are DM'd directly to you."
@@ -728,7 +730,8 @@ async def _handle_help(bot: Bot, update: Update) -> None:
         "/analyze [token] — full AI narrative analysis via Groq (~20s)\n"
         "/close-trade [id] — manually close an open paper trade\n"
         "/trending — top 5 trending tokens on Solana right now\n"
-        "/new-listings — 5 newest token launches\n"
+        "/newlisting — 5 newest token launches (menu command)\n"
+        "Alias: /new-listings also works\n"
         "/help — show this message\n\n"
         "🔔 Trade alerts fire automatically when whales move $1,000+.\n"
         "📩 Watchlist alerts are DM'd directly to you for wallets you /watch."
@@ -1441,20 +1444,20 @@ async def _handle_trending(bot: Bot, update: Update) -> None:
         await bot.send_message(chat_id=chat_id, text="📊 No trending tokens available right now.", parse_mode="HTML")
         return
 
-    lines = ["🔥 <b>Top 5 Trending on Solana</b>\n"]
+    lines = ["🔥 <b>Top 5 Trending on Solana</b>"]
     for token in tokens[:5]:
         addr = token.get("address", "")
         symbol = token.get("symbol") or addr[:8]
         price = token.get("price") or 0
-        pct = token.get("priceChange24hPercent") or 0
+        pct = token.get("priceChange24hPercent") or token.get("price24hChangePercent") or 0
         rank = token.get("rank") or "?"
         pct_str = f"{pct:+.2f}%" if pct else "—"
         pct_emoji = "🟢" if pct > 0 else ("🔴" if pct < 0 else "⬜")
         price_str = f"${price:.6g}" if price and price < 1 else (f"${price:,.4f}" if price else "—")
         birdeye_url = f"https://birdeye.so/token/{addr}?chain=solana"
         lines.append(
-            f"#{rank} <b>${symbol}</b> — {price_str}\n"
-            f"    {pct_emoji} {pct_str} 24h  |  <a href='{birdeye_url}'>Chart</a>"
+            f"#{rank} <b>${symbol}</b>  <code>{price_str}</code>\n"
+            f"24h: {pct_emoji} <b>{pct_str}</b> • <a href='{birdeye_url}'>View chart</a>"
         )
 
     await bot.send_message(
@@ -1481,8 +1484,8 @@ async def _handle_new_listings(bot: Bot, update: Update) -> None:
         await bot.send_message(chat_id=chat_id, text="📊 No new listings available right now.", parse_mode="HTML")
         return
 
-    lines = ["🆕 <b>5 Newest Solana Token Listings</b>\n"]
-    for token in tokens[:5]:
+    lines = ["🆕 <b>Newest Solana Listings (Top 5)</b>"]
+    for idx, token in enumerate(tokens[:5], start=1):
         addr = token.get("address") or ""
         symbol = token.get("symbol") or addr[:8]
         price = token.get("price") or 0
@@ -1492,8 +1495,8 @@ async def _handle_new_listings(bot: Bot, update: Update) -> None:
         price_str = f"${price:.6g}" if price and price < 1 else (f"${price:,.4f}" if price else "—")
         birdeye_url = f"https://birdeye.so/token/{addr}?chain=solana"
         lines.append(
-            f"<b>${symbol}</b> — {price_str}\n"
-            f"    {pct_emoji} {pct_str} 24h  |  <a href='{birdeye_url}'>Chart</a>"
+            f"#{idx} <b>${symbol}</b>  <code>{price_str}</code>\n"
+            f"24h: {pct_emoji} <b>{pct_str}</b> • <a href='{birdeye_url}'>View chart</a>"
         )
 
     await bot.send_message(
@@ -1673,7 +1676,7 @@ async def _dispatch(bot: Bot, update: Update) -> None:
 async def _register_commands(bot: Bot) -> None:
     """Register bot commands so they show in Telegram's command menu."""
     try:
-        await bot.set_my_commands([
+        commands = [
             BotCommand("start", "Welcome + command overview"),
             BotCommand("wallets", "List tracked whale wallets"),
             BotCommand("stats", "Show aggregate wallet stats"),
@@ -1681,9 +1684,12 @@ async def _register_commands(bot: Bot) -> None:
             BotCommand("signal", "Data-only token signal breakdown"),
             BotCommand("analyze", "AI token analysis (Groq)"),
             BotCommand("trending", "Top 5 trending tokens"),
-            BotCommand("new_listings", "5 newest token launches"),
+            BotCommand("newlisting", "5 newest token launches"),
             BotCommand("help", "Show all commands"),
-        ])
+        ]
+        # Register in both default and private scopes so commands appear reliably.
+        await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+        await bot.set_my_commands(commands, scope=BotCommandScopeAllPrivateChats())
         logger.info("Telegram bot command menu registered.")
     except Exception as exc:
         logger.warning("Failed to register Telegram commands: %s", exc)
@@ -1701,7 +1707,7 @@ async def run_bot_command_loop() -> None:
         return
 
     await _register_commands(bot)
-    logger.info("Telegram command loop started — listening for /start, /wallets, /stats, /top, /wallet, /filter, /watch, /unwatch, /my-wallets, /track, /my-trades, /alert, /my-alerts, /cancel-alert, /signal, /analyze, /close-trade, /trending, /trendings, /new-listings, /newlistings, /help")
+    logger.info("Telegram command loop started — listening for /start, /wallets, /stats, /top, /wallet, /filter, /watch, /unwatch, /my-wallets, /track, /my-trades, /alert, /my-alerts, /cancel-alert, /signal, /analyze, /close-trade, /trending, /trendings, /newlisting, /new-listings, /newlistings, /help")
     offset: int | None = None
 
     while True:
