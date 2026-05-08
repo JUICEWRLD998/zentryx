@@ -6,12 +6,13 @@ spindown (triggered by HTTP inactivity) never kills the monitors.
 
 Responsibilities:
   1. Connect to PostgreSQL
-  2. Start APScheduler (weekly wallet discovery + 6-hourly snapshots + daily TTL cleanup)
+  2. Start APScheduler (daily wallet discovery + 6-hourly snapshots + daily TTL cleanup)
   3. Run initial wallet discovery on startup
   4. Start Solana RPC WebSocket listener (real-time whale trade detection)
-  5. Start Telegram bot command loop
-  6. Send Telegram startup notification
-  7. Keep running forever — exits only on SIGINT / SIGTERM
+  5. Start REST polling worker (Birdeye token tx polling — catches DEX swaps the WS misses)
+  6. Start Telegram bot command loop
+  7. Send Telegram startup notification
+  8. Keep running forever — exits only on SIGINT / SIGTERM
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ import db
 from scheduler import scheduler
 from services.enrichment import process_trade_event
 from services.solana_rpc_ws import run_solana_rpc_ws
+from services.polling_worker import run_polling_worker
 from services.telegram import run_bot_command_loop, send_startup_message
 from services.wallet_discovery import discover_wallets
 
@@ -51,6 +53,9 @@ async def main() -> None:
     ws_task = asyncio.create_task(run_solana_rpc_ws(process_trade_event))
     logger.info("Solana RPC WebSocket listener started.")
 
+    polling_task = asyncio.create_task(run_polling_worker(process_trade_event))
+    logger.info("REST polling worker started (Birdeye token tx polling).")
+
     bot_task = asyncio.create_task(run_bot_command_loop())
     logger.info("Telegram bot command loop started.")
 
@@ -72,9 +77,9 @@ async def main() -> None:
 
     # ── Graceful shutdown ───────────────────────────────────────────────────
     logger.info("Zentryx worker shutting down...")
-    ws_task.cancel()
-    bot_task.cancel()
-    await asyncio.gather(ws_task, bot_task, return_exceptions=True)
+    for task in (ws_task, polling_task, bot_task):
+        task.cancel()
+    await asyncio.gather(ws_task, polling_task, bot_task, return_exceptions=True)
     scheduler.shutdown(wait=False)
     await db.disconnect()
     logger.info("Zentryx worker shut down.")

@@ -4,11 +4,13 @@ Zentryx FastAPI application entry point.
 Startup sequence (via lifespan):
   1. Load .env
   2. Connect to PostgreSQL
-  3. Start APScheduler (weekly wallet discovery + 6-hourly snapshots)
+  3. Start APScheduler (daily wallet discovery + 6-hourly snapshots)
   4. Run initial wallet discovery
   5. Start Solana RPC WebSocket listener (real-time whale trade detection)
-  6. Start Telegram bot command loop
-  7. Send Telegram startup notification
+  6. Start REST polling worker (Birdeye token tx polling — catches DEX swaps the WS misses)
+  7. Start Telegram bot command loop
+  8. Start price monitor
+  9. Send Telegram startup notification
 """
 from __future__ import annotations
 
@@ -32,6 +34,7 @@ from routers.trades import router as trades_router
 from routers.tokens import router as tokens_router
 from scheduler import scheduler
 from services.solana_rpc_ws import run_solana_rpc_ws
+from services.polling_worker import run_polling_worker
 from services.enrichment import process_trade_event
 from services.telegram import run_bot_command_loop, send_startup_message
 from services.wallet_discovery import discover_wallets
@@ -45,13 +48,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 _ws_task: asyncio.Task | None = None
+_polling_task: asyncio.Task | None = None
 _bot_task: asyncio.Task | None = None
 _monitor_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _ws_task, _bot_task
+    global _ws_task, _polling_task, _bot_task, _monitor_task
     # ── Startup ────────────────────────────────────────────────────────────
     logger.info("Zentryx backend starting up...")
     await db.connect()
@@ -60,6 +64,8 @@ async def lifespan(app: FastAPI):
     await discover_wallets()
     _ws_task = asyncio.create_task(run_solana_rpc_ws(process_trade_event))
     logger.info("Solana RPC WebSocket listener started.")
+    _polling_task = asyncio.create_task(run_polling_worker(process_trade_event))
+    logger.info("REST polling worker started (Birdeye token tx polling).")
     _bot_task = asyncio.create_task(run_bot_command_loop())
     logger.info("Telegram bot command loop started.")
     _monitor_task = asyncio.create_task(run_price_monitor())
@@ -68,12 +74,13 @@ async def lifespan(app: FastAPI):
     logger.info("Startup complete.")
     yield
     # ── Shutdown ───────────────────────────────────────────────────────────
-    if _ws_task and not _ws_task.done():
-        _ws_task.cancel()
-    if _bot_task and not _bot_task.done():
-        _bot_task.cancel()
-    if _monitor_task and not _monitor_task.done():
-        _monitor_task.cancel()
+    for task in (_ws_task, _polling_task, _bot_task, _monitor_task):
+        if task and not task.done():
+            task.cancel()
+    await asyncio.gather(
+        *[t for t in (_ws_task, _polling_task, _bot_task, _monitor_task) if t],
+        return_exceptions=True,
+    )
     scheduler.shutdown(wait=False)
     await db.disconnect()
     logger.info("Zentryx backend shut down.")
