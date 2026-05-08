@@ -41,6 +41,14 @@ interface TokenOverview {
   supply: number;
   circulatingSupply: number;
   lastTradeUnixTime: number;
+  securityScore: number | null;
+  securityFlags: {
+    mintable: boolean;
+    freezeable: boolean;
+    mutableMetadata: boolean;
+    transferFee: boolean;
+    top10HolderPct: number | null;
+  };
 }
 
 type Verdict = "BUY" | "WATCH" | "AVOID";
@@ -101,7 +109,7 @@ function scoreToken(t: TokenOverview): TokenScore {
 
   // ── Security (derived) ──
   const secSigs: ScoringSignal[] = []; const secLabels: ScoreLabel[] = [];
-  let secScore = 60;
+  let secScore = typeof t.securityScore === "number" ? t.securityScore : 60;
   if (mc > 0) {
     const r = liq / mc;
     if (r < 0.03)  { secScore -= 20; sig(secSigs, "Liquidity < 3% of market cap — potential rug risk", -20, "security"); }
@@ -110,7 +118,31 @@ function scoreToken(t: TokenOverview): TokenScore {
   if (holders < 50)   { secScore -= 20; secLabels.push("low-holders"); sig(secSigs, `Very few holders (${holders}) — high concentration risk`, -20, "security"); }
   else if (holders < 200) { secScore -= 10; secLabels.push("low-holders"); sig(secSigs, `Low holder count (${holders}) — limited distribution`, -10, "security"); }
   else if (holders >= 1000) { secScore += 8; sig(secSigs, `Strong holder base (${holders.toLocaleString()})`, +8, "security"); }
-  sig(secSigs, "Full security audit unavailable — showing derived signals only", 0, "security");
+  if (t.securityFlags.freezeable) {
+    secScore -= 15;
+    secLabels.push("freezeable");
+    sig(secSigs, "Freeze authority is enabled — centralized freeze risk", -15, "security");
+  }
+  if (t.securityFlags.mintable) {
+    secScore -= 15;
+    secLabels.push("mintable");
+    sig(secSigs, "Mint authority is enabled — supply inflation risk", -15, "security");
+  }
+  if (t.securityFlags.transferFee) {
+    secScore -= 10;
+    secLabels.push("transfer-fee");
+    sig(secSigs, "Transfer fee is enabled — potential trading friction", -10, "security");
+  }
+  if (t.securityFlags.mutableMetadata) {
+    secScore -= 5;
+    secLabels.push("mutable-metadata");
+    sig(secSigs, "Metadata is mutable — contract metadata can change", -5, "security");
+  }
+  if (typeof t.securityFlags.top10HolderPct === "number" && t.securityFlags.top10HolderPct > 80) {
+    secScore -= 10;
+    secLabels.push("concentrated-supply");
+    sig(secSigs, `Top 10 holders own ${t.securityFlags.top10HolderPct.toFixed(1)}% — high concentration`, -10, "security");
+  }
   secScore = clamp(secScore);
 
   // ── Risk ──
@@ -183,8 +215,12 @@ function scoreToken(t: TokenOverview): TokenScore {
   }
 
   return {
-    overall, risk: riskScore, opportunity: oppScore, momentum: momScore,
-    liquidity: liqScore, security: secScore,
+    overall,
+    risk: Math.round(riskScore),
+    opportunity: Math.round(oppScore),
+    momentum: Math.round(momScore),
+    liquidity: Math.round(liqScore),
+    security: Math.round(secScore),
     verdict, verdictReason, labels: allLabels, signals: allSignals, confidence: 0.5,
   };
 }
@@ -348,17 +384,26 @@ const LABEL_STYLES: Record<ScoreLabel, string> = {
   "low-mcap-gem": "border-cyan/30 bg-cyan/10 text-cyan", "honeypot-risk": "border-sell/30 bg-sell/10 text-sell",
 };
 
-function AIPanel({ insight }: { insight: string }) {
+function AIPanel({ insight, source }: { insight: string; source: "groq" | "rule-based" }) {
   return (
     <div className="rounded-xl border border-cyan/20 bg-cyan/5 p-5 ring-1 ring-cyan/10">
       <div className="mb-3 flex items-center gap-2">
         <Sparkles className="h-4 w-4 text-cyan" />
         <span className="text-sm font-semibold text-cyan">AI Insight</span>
         <span className="inline-flex items-center rounded-full border border-border bg-muted/60 px-2 py-0.5 font-mono text-[9px] font-bold text-muted-foreground">
-          Rule-based
+          {source === "groq" ? "Groq" : "Rule-based"}
         </span>
       </div>
       <p className="text-sm leading-relaxed text-muted-foreground">{insight}</p>
+    </div>
+  );
+}
+
+function SecurityFlagChip({ on, label }: { on: boolean; label: string }) {
+  return (
+    <div className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 font-mono text-[10px] ${on ? "border-sell/30 bg-sell/10 text-sell" : "border-buy/30 bg-buy/10 text-buy"}`}>
+      <span>{on ? "RISK" : "OK"}</span>
+      <span className="opacity-80">{label}</span>
     </div>
   );
 }
@@ -372,14 +417,29 @@ export default function TokenDetailPage() {
   const [token, setToken]     = useState<TokenOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
+  const [aiInsight, setAiInsight] = useState<string>("");
+  const [aiSource, setAiSource] = useState<"groq" | "rule-based">("rule-based");
 
   const fetchToken = useCallback(async () => {
     if (!address) return;
     setLoading(true); setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/tokens/${address}/overview`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setToken(await res.json());
+      const [overviewRes, insightRes] = await Promise.all([
+        fetch(`${API_BASE}/api/tokens/${address}/overview`),
+        fetch(`${API_BASE}/api/tokens/${address}/insight`),
+      ]);
+      if (!overviewRes.ok) throw new Error(`HTTP ${overviewRes.status}`);
+      const overview = (await overviewRes.json()) as TokenOverview;
+      setToken(overview);
+
+      if (insightRes.ok) {
+        const insightJson = (await insightRes.json()) as { insight?: string; source?: "groq" | "rule-based" };
+        setAiInsight(insightJson.insight || "");
+        setAiSource(insightJson.source === "groq" && !!insightJson.insight ? "groq" : "rule-based");
+      } else {
+        setAiInsight("");
+        setAiSource("rule-based");
+      }
     } catch (e) { setError(String(e)); }
     finally { setLoading(false); }
   }, [address]);
@@ -442,7 +502,7 @@ export default function TokenDetailPage() {
   }
 
   const score   = scoreToken(token);
-  const insight = buildInsight(token, score);
+  const insight = aiInsight || buildInsight(token, score);
 
   const LINKS = [
     { href: `https://solscan.io/token/${address}`,              label: "Solscan" },
@@ -529,7 +589,7 @@ export default function TokenDetailPage() {
         </div>
 
         {/* ── AI insight ─── */}
-        <AIPanel insight={insight} />
+        <AIPanel insight={insight} source={aiInsight ? aiSource : "rule-based"} />
 
         {/* ── Chart ─── */}
         <section>
@@ -554,28 +614,41 @@ export default function TokenDetailPage() {
             <ScoreCard label="Opportunity" score={score.opportunity} description="Upside potential from price action, market cap, and momentum." />
             <ScoreCard label="Momentum"    score={score.momentum}    description="Volume trend, price acceleration, and buy/sell confirmation." />
             <ScoreCard label="Liquidity"   score={score.liquidity}   description="Depth of on-chain pools — determines entry and exit ease." />
-            <ScoreCard label="Security"    score={score.security}    description="Derived from holder count and liquidity ratio. On-chain audit coming soon." />
+            <ScoreCard label="Security"    score={score.security}    description="Uses Birdeye premium token-security flags plus holder/liquidity context." />
           </div>
         </section>
 
-        {/* ── Security panel (coming soon) ─── */}
+        {/* ── Security panel ─── */}
         <section>
           <div className="mb-3 flex items-center gap-2">
             <ShieldAlert className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold text-foreground">Security Flags</h2>
-            <span className="inline-flex items-center rounded-full border border-border bg-muted/60 px-2 py-0.5 font-mono text-[9px] font-bold text-muted-foreground">
-              Coming Soon
+            <span className="inline-flex items-center rounded-full border border-buy/30 bg-buy/10 px-2 py-0.5 font-mono text-[9px] font-bold text-buy">
+              Live (Premium)
             </span>
           </div>
-          <div className="flex flex-col items-center gap-4 rounded-xl border border-border bg-card px-6 py-10 text-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-border bg-muted">
-              <ShieldOff className="h-6 w-6 text-muted-foreground" />
+          <div className="rounded-xl border border-border bg-card p-5">
+            <div className="mb-4 flex flex-wrap gap-2">
+              <SecurityFlagChip on={token.securityFlags.mintable} label="Mintable" />
+              <SecurityFlagChip on={token.securityFlags.freezeable} label="Freezeable" />
+              <SecurityFlagChip on={token.securityFlags.mutableMetadata} label="Mutable Metadata" />
+              <SecurityFlagChip on={token.securityFlags.transferFee} label="Transfer Fee" />
             </div>
-            <div>
-              <p className="text-sm font-semibold text-foreground">On-chain Security Audit — Coming Soon</p>
-              <p className="mt-1 max-w-xs font-mono text-xs leading-relaxed text-muted-foreground">
-                Mint authority, freeze authority, LP burn status, and transfer fee scanning require a higher API tier and will be available in a future update.
-              </p>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <div className="rounded-lg border border-border p-3">
+                <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Security Score</p>
+                <p className="font-mono text-sm font-bold text-foreground">{typeof token.securityScore === "number" ? `${Math.round(token.securityScore)}/100` : "N/A"}</p>
+              </div>
+              <div className="rounded-lg border border-border p-3">
+                <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Top 10 Holders</p>
+                <p className="font-mono text-sm font-bold text-foreground">{typeof token.securityFlags.top10HolderPct === "number" ? `${token.securityFlags.top10HolderPct.toFixed(1)}%` : "N/A"}</p>
+              </div>
+              <div className="rounded-lg border border-border p-3">
+                <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Risk Verdict</p>
+                <p className={`font-mono text-sm font-bold ${score.security >= 70 ? "text-buy" : score.security >= 50 ? "text-yellow-400" : "text-sell"}`}>
+                  {score.security >= 70 ? "LOW" : score.security >= 50 ? "MED" : "HIGH"}
+                </p>
+              </div>
             </div>
           </div>
         </section>

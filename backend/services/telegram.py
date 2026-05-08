@@ -22,7 +22,7 @@ import logging
 import os
 import time
 
-from telegram import Bot, Update
+from telegram import Bot, BotCommand, Update
 from telegram.error import TelegramError
 from sqlalchemy import select, delete
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -1657,11 +1657,36 @@ async def _dispatch(bot: Bot, update: Update) -> None:
         await _handle_analyze(bot, update)
     elif text.startswith("/close-trade ") or text == "/close-trade":
         await _handle_close_trade(bot, update)
-    elif text.startswith("/trending") or text == "/trending":
+    elif text.startswith("/trending") or text.startswith("/trendings"):
         await _handle_trending(bot, update)
-    elif text.startswith("/new-listings") or text == "/new-listings":
+    elif (
+        text.startswith("/new-listings")
+        or text.startswith("/new_listings")
+        or text.startswith("/newlisting")
+        or text.startswith("/new-listing")
+        or text.startswith("/newlistings")
+    ):
         await _handle_new_listings(bot, update)
     # Unknown commands silently ignored
+
+
+async def _register_commands(bot: Bot) -> None:
+    """Register bot commands so they show in Telegram's command menu."""
+    try:
+        await bot.set_my_commands([
+            BotCommand("start", "Welcome + command overview"),
+            BotCommand("wallets", "List tracked whale wallets"),
+            BotCommand("stats", "Show aggregate wallet stats"),
+            BotCommand("top", "Top wallets by PnL"),
+            BotCommand("signal", "Data-only token signal breakdown"),
+            BotCommand("analyze", "AI token analysis (Groq)"),
+            BotCommand("trending", "Top 5 trending tokens"),
+            BotCommand("new_listings", "5 newest token launches"),
+            BotCommand("help", "Show all commands"),
+        ])
+        logger.info("Telegram bot command menu registered.")
+    except Exception as exc:
+        logger.warning("Failed to register Telegram commands: %s", exc)
 
 
 async def run_bot_command_loop() -> None:
@@ -1675,7 +1700,8 @@ async def run_bot_command_loop() -> None:
         logger.warning("Telegram bot token not set — command loop disabled.")
         return
 
-    logger.info("Telegram command loop started — listening for /start, /wallets, /stats, /top, /wallet, /filter, /watch, /unwatch, /my-wallets, /track, /my-trades, /alert, /my-alerts, /cancel-alert, /signal, /analyze, /close-trade, /trending, /new-listings, /help")
+    await _register_commands(bot)
+    logger.info("Telegram command loop started — listening for /start, /wallets, /stats, /top, /wallet, /filter, /watch, /unwatch, /my-wallets, /track, /my-trades, /alert, /my-alerts, /cancel-alert, /signal, /analyze, /close-trade, /trending, /trendings, /new-listings, /newlistings, /help")
     offset: int | None = None
 
     while True:

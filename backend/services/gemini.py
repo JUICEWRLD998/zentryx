@@ -263,3 +263,74 @@ async def analyse_daily_briefing(data: dict) -> str | None:
             return None
 
 
+async def analyse_token_overview(
+    *,
+    token_symbol: str,
+    token_address: str,
+    price: float,
+    price_change_24h: float,
+    volume_24h_usd: float,
+    market_cap: float,
+    liquidity: float,
+    holders: int,
+    security_score: float | None,
+    flags: dict[str, object] | None = None,
+) -> str | None:
+    """
+    Generate a concise AI insight paragraph for the token detail page.
+
+    Returns a 2-3 sentence paragraph or None if Groq is unavailable.
+    """
+    global _last_call_ts
+
+    client = await _get_client()
+    if client is None:
+        return None
+
+    flags = flags or {}
+    score_str = f"{security_score:.0f}/100" if security_score is not None else "N/A"
+    prompt = (
+        "You are a concise Solana token analyst. "
+        "Write exactly 2-3 sentences in plain prose with no markdown and no bullet points. "
+        "Give a practical trading risk/reward view using the metrics below.\n\n"
+        f"Token: {token_symbol} ({token_address[:8]}...)\n"
+        f"Price: ${price:,.8f}\n"
+        f"24h change: {price_change_24h:+.2f}%\n"
+        f"24h volume: ${volume_24h_usd:,.0f}\n"
+        f"Market cap: ${market_cap:,.0f}\n"
+        f"Liquidity: ${liquidity:,.0f}\n"
+        f"Holders: {holders:,}\n"
+        f"Security score: {score_str}\n"
+        f"Security flags: {flags}\n\n"
+        "Focus on the single most important bullish factor and single most important risk factor."
+    )
+
+    async with _groq_sem:
+        now = time.monotonic()
+        wait = _MIN_INTERVAL_S - (now - _last_call_ts)
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+        try:
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: client.chat.completions.create(
+                    model=_MODEL_NAME,
+                    messages=[
+                        {"role": "system", "content": "You are a concise Solana on-chain analyst."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.35,
+                    max_tokens=220,
+                ),
+            )
+            _last_call_ts = time.monotonic()
+            insight = response.choices[0].message.content.strip()
+            return insight or None
+        except Exception as exc:
+            logger.warning("Groq token-overview analysis failed for %s: %s", token_symbol, exc)
+            _last_call_ts = time.monotonic()
+            return None
+
+

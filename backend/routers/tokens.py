@@ -34,6 +34,29 @@ _TIMEFRAME_MAP = {
 }
 
 
+def _normalize_security_flags(sec: dict) -> dict:
+    """Normalize token_security fields for frontend consumption."""
+    top10 = sec.get("top10HolderPercent")
+    if isinstance(top10, (int, float)):
+        top10_pct = round(float(top10) * 100, 1)
+    else:
+        top10_pct = None
+
+    risk_raw = sec.get("riskScore")
+    risk_score = float(risk_raw) if isinstance(risk_raw, (int, float, str)) and str(risk_raw).strip() else None
+    security_score = None if risk_score is None else max(0.0, min(100.0, 100.0 - risk_score))
+
+    return {
+        "mintable": bool(sec.get("mintable")),
+        "freezeable": bool(sec.get("freezeable")),
+        "mutable_metadata": bool(sec.get("mutableMetadata")),
+        "transfer_fee": bool(sec.get("transferFeeEnable")),
+        "top10_holder_pct": top10_pct,
+        "risk_score": risk_score,
+        "security_score": security_score,
+    }
+
+
 @router.get("/tokens/{address}/ohlcv")
 async def get_ohlcv(
     address: str,
@@ -86,12 +109,17 @@ async def get_token_overview_route(address: str) -> dict:
     Fields match the BirdeyeToken shape used by AlphaScope.
     """
     try:
-        raw = await birdeye.get_token_overview(address)
+        raw, security_raw = await asyncio.gather(
+            birdeye.get_token_overview(address),
+            birdeye.get_token_security(address),
+        )
     except Exception as exc:
         logger.warning("Token overview fetch failed for %s: %s", address[:8], exc)
         raise HTTPException(502, "Failed to fetch token data from Birdeye")
 
     data = (raw or {}).get("data") or {}
+    sec_data = (security_raw or {}).get("data") or {}
+    sec = _normalize_security_flags(sec_data)
     if not data:
         raise HTTPException(404, "Token not found or not yet indexed")
 
@@ -111,7 +139,57 @@ async def get_token_overview_route(address: str) -> dict:
         "supply":                data.get("supply") or data.get("totalSupply") or 0,
         "circulatingSupply":     data.get("circulatingSupply") or 0,
         "lastTradeUnixTime":     data.get("lastTradeUnixTime") or 0,
+        "securityScore":         sec.get("security_score"),
+        "securityFlags": {
+            "mintable": sec.get("mintable"),
+            "freezeable": sec.get("freezeable"),
+            "mutableMetadata": sec.get("mutable_metadata"),
+            "transferFee": sec.get("transfer_fee"),
+            "top10HolderPct": sec.get("top10_holder_pct"),
+        },
     }
+
+
+@router.get("/tokens/{address}/insight")
+async def get_token_ai_insight(address: str) -> dict:
+    """Return a Groq-generated token insight paragraph for the token detail page."""
+    try:
+        raw, security_raw = await asyncio.gather(
+            birdeye.get_token_overview(address),
+            birdeye.get_token_security(address),
+        )
+    except Exception as exc:
+        logger.warning("Token insight fetch failed for %s: %s", address[:8], exc)
+        raise HTTPException(502, "Failed to fetch token data for AI insight")
+
+    data = (raw or {}).get("data") or {}
+    sec_data = (security_raw or {}).get("data") or {}
+    if not data:
+        raise HTTPException(404, "Token not found or not yet indexed")
+
+    from services.gemini import analyse_token_overview
+
+    sec = _normalize_security_flags(sec_data)
+    insight = await analyse_token_overview(
+        token_symbol=data.get("symbol") or address[:8],
+        token_address=address,
+        price=float(data.get("price") or 0),
+        price_change_24h=float(data.get("priceChange24hPercent") or data.get("price24hChangePercent") or 0),
+        volume_24h_usd=float(data.get("v24hUSD") or data.get("volume24hUSD") or 0),
+        market_cap=float(data.get("mc") or data.get("marketCap") or data.get("marketcap") or 0),
+        liquidity=float(data.get("liquidity") or 0),
+        holders=int(data.get("holder") or 0),
+        security_score=sec.get("security_score"),
+        flags={
+            "mintable": sec.get("mintable"),
+            "freezeable": sec.get("freezeable"),
+            "mutable_metadata": sec.get("mutable_metadata"),
+            "transfer_fee": sec.get("transfer_fee"),
+            "top10_holder_pct": sec.get("top10_holder_pct"),
+        },
+    )
+
+    return {"insight": insight, "source": "groq" if insight else "rule-based"}
 
 
 @router.get("/tokens/{address}/whale-buys")
