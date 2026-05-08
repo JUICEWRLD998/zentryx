@@ -1,8 +1,8 @@
 """
 APScheduler jobs:
-  1. Weekly wallet discovery — every Sunday at midnight UTC
-  2. 6-hour wallet snapshots — PnL + net worth for historical charting
-  3. Daily TTL cleanup — delete trade_event rows older than 30 days at 03:00 UTC
+    1. Daily wallet discovery — every day at midnight UTC
+    2. 6-hour wallet snapshots — PnL + net worth for historical charting
+    3. Daily TTL cleanup — delete trade_event rows older than 30 days at 03:00 UTC
 
 The scheduler is started and stopped via the FastAPI lifespan hook in main.py.
 """
@@ -21,14 +21,13 @@ logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler()
 
-# Job 1 — Weekly whale discovery (unchanged)
+# Job 1 — Daily whale discovery
 scheduler.add_job(
     discover_wallets,
     trigger="cron",
-    day_of_week="sun",
     hour=0,
     minute=0,
-    id="weekly_wallet_discovery",
+    id="daily_wallet_discovery",
     replace_existing=True,
 )
 

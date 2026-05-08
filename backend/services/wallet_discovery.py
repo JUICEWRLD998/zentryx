@@ -28,7 +28,7 @@ from services import birdeye
 
 logger = logging.getLogger(__name__)
 
-# In-memory store — address → TrackedWallet (populated on startup + weekly)
+# In-memory store — address → TrackedWallet (populated on startup + daily)
 tracked_wallets: dict[str, TrackedWallet] = {}
 
 # Max addresses per pnl/multiple call (Birdeye free-tier safe limit)
@@ -122,6 +122,7 @@ async def discover_wallets() -> None:
     """
     global tracked_wallets
     logger.info("Starting wallet discovery...")
+    previous_addresses = set(tracked_wallets.keys())
 
     try:
         gainers_raw = await birdeye.get_gainers_losers(
@@ -224,6 +225,20 @@ async def discover_wallets() -> None:
 
     tracked_wallets = new_wallets
     logger.info("Wallet discovery complete — %d wallets tracked.", len(tracked_wallets))
+
+    current_addresses = set(new_wallets.keys())
+    if current_addresses != previous_addresses:
+        try:
+            from services.solana_rpc_ws import request_resubscribe
+
+            request_resubscribe()
+            logger.info(
+                "Tracked wallet set changed (%d -> %d) — requested Solana WS resubscribe.",
+                len(previous_addresses),
+                len(current_addresses),
+            )
+        except Exception as exc:
+            logger.warning("Failed to request Solana WS resubscribe: %s", exc)
 
     # ── Persist to PostgreSQL (upsert) ────────────────────────────────────
     if db.is_available():

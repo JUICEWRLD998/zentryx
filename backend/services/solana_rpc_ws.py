@@ -68,9 +68,16 @@ _seen_signatures: set[str] = set()
 # Subscription ID → wallet address mapping (set during subscribe phase)
 _sub_id_to_wallet: dict[int, str] = {}
 
+# Reconnect trigger used when discovery changes the tracked wallet set.
+_resubscribe_event = asyncio.Event()
+
 # Running estimate of SOL/USD price (refreshed every minute via RPC call)
 _sol_price_usd: float = 150.0
 _sol_price_fetched_at: float = 0.0
+
+
+class ResubscribeRequested(Exception):
+    """Raised to restart the WS connection with a fresh wallet subscription set."""
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -90,6 +97,11 @@ def _ws_url() -> str:
 
 def _http_url() -> str:
     return os.getenv("SOLANA_RPC_HTTP_URL", _DEFAULT_HTTP_URL)
+
+
+def request_resubscribe() -> None:
+    """Signal the WS loop to reconnect and subscribe the latest tracked wallets."""
+    _resubscribe_event.set()
 
 
 async def _rpc_post(method: str, params: list[Any]) -> dict[str, Any]:
@@ -374,6 +386,7 @@ async def _run_connection(on_event) -> None:
     from services.wallet_discovery import tracked_wallets  # live state
 
     _sub_id_to_wallet.clear()
+    _resubscribe_event.clear()
     wallet_addresses = list(tracked_wallets.keys())
 
     if not wallet_addresses:
@@ -417,7 +430,22 @@ async def _run_connection(on_event) -> None:
 
         pending_ids = {i + 1: wallet_addresses[i] for i in range(len(wallet_addresses))}
 
-        async for raw in ws:
+        while True:
+            recv_task = asyncio.create_task(ws.recv())
+            resubscribe_task = asyncio.create_task(_resubscribe_event.wait())
+            done, pending = await asyncio.wait(
+                {recv_task, resubscribe_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            for task in pending:
+                task.cancel()
+
+            if resubscribe_task in done and _resubscribe_event.is_set():
+                recv_task.cancel()
+                raise ResubscribeRequested()
+
+            raw = recv_task.result()
             try:
                 msg: dict[str, Any] = json.loads(raw)
             except json.JSONDecodeError:
@@ -472,11 +500,17 @@ async def run_solana_rpc_ws(on_event) -> None:
 
     while True:
         attempt += 1
+        reconnect_immediately = False
         try:
             await _run_connection(on_event)
             # Clean exit (e.g. server closed gracefully) — reset delay
             delay = RECONNECT_DELAY_SECS
             logger.info("Solana RPC WS connection closed cleanly. Reconnecting…")
+
+        except ResubscribeRequested:
+            delay = RECONNECT_DELAY_SECS
+            reconnect_immediately = True
+            logger.info("Tracked wallets changed. Reconnecting Solana RPC WS now…")
 
         except ConnectionClosed as exc:
             logger.warning(
@@ -494,5 +528,9 @@ async def run_solana_rpc_ws(on_event) -> None:
                 attempt, exc, delay,
             )
             delay = min(delay * 2, MAX_RECONNECT_DELAY_SECS)
+
+        if reconnect_immediately or _resubscribe_event.is_set():
+            _resubscribe_event.clear()
+            continue
 
         await asyncio.sleep(delay)
