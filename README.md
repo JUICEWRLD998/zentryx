@@ -132,14 +132,7 @@ Ranking and persistence:
 What this means in practice:
 - Zentryx tracks a high-signal sampled cohort of top-performing wallets, not an exhaustive global ranking of all Solana wallets.
 - This is a deliberate hackathon tradeoff for reliability, speed, and API efficiency.
-
-## Why This Is Hackathon-Ready
-
-- End-to-end working system across ingestion, enrichment, storage, API, frontend, and Telegram operations
-- Real-time Solana monitoring plus risk-aware token intelligence and AI commentary
-- Practical trader workflow coverage: discovery, alerts, watchlists, paper trading, and performance stats
-- Clear production-minded constraints documented (API contract variance, sampled ranking model)
-
+- 
 ## Telegram Bot Commands
 
 Supported command set:
@@ -163,12 +156,7 @@ Supported command set:
 - /analyze
 - /close-trade
 - /trending
-- /trendings
-- /new-listings
-- /new_listings
-- /newlisting
 - /new-listing
-- /newlistings
 
 The bot also registers a command menu through Telegram API for improved discoverability.
 
