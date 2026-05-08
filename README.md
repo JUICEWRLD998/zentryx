@@ -163,12 +163,7 @@ Supported command set:
 - /analyze
 - /close-trade
 - /trending
-- /trendings
-- /new-listings
-- /new_listings
-- /newlisting
 - /new-listing
-- /newlistings
 
 The bot also registers a command menu through Telegram API for improved discoverability.
 
