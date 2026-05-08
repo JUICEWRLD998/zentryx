@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { Activity, BarChart2, ExternalLink, RefreshCw, TrendingUp, Zap } from "lucide-react";
+import { Activity, ExternalLink, RefreshCw, TrendingUp, Zap } from "lucide-react";
 import { NavBar } from "@/components/navbar";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -162,9 +162,11 @@ function BreakoutCard({ token }: { token: TrendingToken }) {
             >
               {token.name || token.symbol}
             </Link>
-            <span className="inline-flex items-center rounded-full bg-cyan/20 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-cyan ring-1 ring-cyan/35">
-              BREAKOUT
-            </span>
+            {b.isBreakout && (
+              <span className="inline-flex items-center rounded-full bg-cyan/20 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-cyan ring-1 ring-cyan/35">
+                BREAKOUT
+              </span>
+            )}
           </div>
           <div className="mt-0.5 flex items-center gap-2">
             <span className="font-mono text-xs text-muted-foreground">{token.symbol}</span>
@@ -341,13 +343,18 @@ export default function TrendingPage() {
   }, []);
 
   useEffect(() => {
-    fetchData();
+    const start = setTimeout(() => {
+      void fetchData();
+    }, 0);
     const id = setInterval(fetchData, 30_000);
-    return () => clearInterval(id);
+    return () => {
+      clearTimeout(start);
+      clearInterval(id);
+    };
   }, [fetchData]);
 
-  const breakouts = tokens.filter((t) => detect(t).isBreakout);
   const ranked    = [...tokens].sort((a, b) => a.rank - b.rank);
+  const topCards  = ranked.slice(0, 20);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -405,30 +412,23 @@ export default function TrendingPage() {
           </div>
         )}
 
-        {/* ── Breakout highlights ──────────────────────────────────────── */}
-        {!loading && breakouts.length > 0 && (
+        {/* ── Top cards (20) ───────────────────────────────────────────── */}
+        {!loading && topCards.length > 0 && (
           <section>
             <div className="mb-4 flex items-center gap-2">
               <Zap className="h-4 w-4 text-cyan" />
-              <h2 className="font-mono text-base font-semibold text-foreground">Active Breakouts</h2>
+              <h2 className="font-mono text-base font-semibold text-foreground">Top 20 Cards</h2>
               <span className="rounded-full bg-cyan/20 px-2.5 py-1 font-mono text-[10px] font-bold text-cyan ring-1 ring-cyan/35">
-                {breakouts.length}
+                {topCards.length}
               </span>
               <span className="ml-auto hidden font-mono text-xs text-muted-foreground sm:inline">
                 Volume surge · Price spike · Rank movement
               </span>
             </div>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {breakouts.map((t) => <BreakoutCard key={t.address} token={t} />)}
+              {topCards.map((t) => <BreakoutCard key={t.address} token={t} />)}
             </div>
           </section>
-        )}
-
-        {!loading && breakouts.length === 0 && tokens.length > 0 && (
-          <div className="flex items-center gap-3 rounded-lg border border-border bg-card px-5 py-4 font-mono text-xs text-muted-foreground">
-            <BarChart2 className="h-4 w-4 shrink-0" />
-            <span>No active breakout signals right now — check back in 30 seconds.</span>
-          </div>
         )}
 
         {/* ── Full rankings ─────────────────────────────────────────────── */}
@@ -437,7 +437,7 @@ export default function TrendingPage() {
             <div className="mb-4 flex items-center gap-2">
               <TrendingUp className="h-4 w-4 text-muted-foreground" />
               <h2 className="font-mono text-base font-semibold text-foreground">Full Rankings</h2>
-              <span className="font-mono text-xs text-muted-foreground">Top {ranked.length} by volume</span>
+              <span className="font-mono text-xs text-muted-foreground">Top {ranked.length} by rank</span>
             </div>
 
             <div className="overflow-hidden rounded-xl border border-border bg-card">

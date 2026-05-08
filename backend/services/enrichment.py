@@ -57,6 +57,10 @@ _consensus_tracker: dict[str, list[tuple[str, float]]] = defaultdict(list)
 _ALERT_COOLDOWN_S: float = 300.0     # 5 minutes between alerts for the same token
 _last_alerted: dict[str, float] = {} # { token_address: monotonic_ts }
 
+# Per-user watchlist AI cooldown — avoids repeated verdict spam for the same token.
+_WATCHLIST_AI_COOLDOWN_S: float = 300.0
+_last_watchlist_ai_alerted: dict[tuple[int, str], float] = {}
+
 
 async def _get_enrichment_lock(token_address: str) -> asyncio.Lock:
     """Return (or lazily create) the per-token lock for enrichment fetches."""
@@ -500,13 +504,13 @@ async def _persist_trade(
     usd_value: float,
     block_time: int | None,
     report: TokenMiniReport,
-) -> None:
+) -> bool:
     """
     Upsert a TradeEvent row into PostgreSQL.
     Uses signature as the unique key — duplicate txs are silently ignored.
     """
     if not db.is_available() or not signature:
-        return
+        return True
 
     side_str = side.upper()
     if side_str not in ("BUY", "SELL"):
@@ -558,13 +562,32 @@ async def _persist_trade(
             .on_conflict_do_nothing(index_elements=["signature"])
         )
         async with get_session() as session:
-            await session.execute(stmt)
+            result = await session.execute(stmt)
+        return bool(result.rowcount)
     except Exception as exc:
         logger.warning("Trade persistence failed for %s: %s", signature[:16], exc)
+        return True
+
+
+async def _get_watcher_user_ids(wallet_id: str | None) -> list[int]:
+    """Return Telegram user IDs watching the given wallet."""
+    if not db.is_available() or not wallet_id:
+        return []
+
+    try:
+        async with get_session() as session:
+            result = await session.execute(
+                select(user_watchlist_table.c.telegram_user_id)
+                .where(user_watchlist_table.c.wallet_id == wallet_id)
+            )
+            return [int(row.telegram_user_id) for row in result.fetchall()]
+    except Exception as exc:
+        logger.debug("Watchlist query failed: %s", exc)
+        return []
 
 
 async def _send_watchlist_alerts(
-    wallet_id: str | None,
+    watcher_user_ids: list[int],
     wallet_label: str,
     wallet_address: str,
     token_symbol: str,
@@ -572,31 +595,21 @@ async def _send_watchlist_alerts(
     side: str,
     usd_value: float,
     report: TokenMiniReport,
+    copy_score: float | None,
 ) -> None:
     """
     Send personal DM alerts to Telegram users who are watching this wallet.
     Requires the user to have previously /start-ed the bot (opened a DM).
     """
-    if not db.is_available() or not wallet_id:
+    if not watcher_user_ids:
         return
 
     from services.telegram import send_personal_trade_alert  # avoid circular import
 
-    try:
-        async with get_session() as session:
-            result = await session.execute(
-                select(user_watchlist_table)
-                .where(user_watchlist_table.c.wallet_id == wallet_id)
-            )
-            watchers = result.fetchall()
-    except Exception as exc:
-        logger.debug("Watchlist query failed: %s", exc)
-        return
-
-    for watcher in watchers:
+    for watcher_user_id in watcher_user_ids:
         asyncio.create_task(
             send_personal_trade_alert(
-                telegram_user_id=int(watcher.telegram_user_id),
+                telegram_user_id=watcher_user_id,
                 wallet_label=wallet_label,
                 wallet_address=wallet_address,
                 token_symbol=token_symbol,
@@ -606,6 +619,7 @@ async def _send_watchlist_alerts(
                 security_score=report.security_score,
                 smart_money=report.smart_money_flag,
                 momentum_24h=report.momentum_24h,
+                copy_score=copy_score,
             )
         )
 
@@ -674,6 +688,40 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
     copy_score = _compute_copy_score(mini_report, consensus_count)
     mini_report.copy_score = copy_score
 
+    # ── Persist trade to DB ───────────────────────────────────────────────
+    wallet_id: str | None = None
+    persisted_new_trade = True
+    if tx_hash:
+        persisted_new_trade = await _persist_trade(
+            signature=tx_hash,
+            wallet_address=wallet_address,
+            wallet_label=wallet_label,
+            token_address=token_address,
+            token_symbol=mini_report.symbol,
+            side=side.upper(),
+            usd_value=float(usd_value or 0),
+            block_time=block_time,
+            report=mini_report,
+        )
+        # Resolve wallet_id for watchlist alerts
+        if db.is_available() and wallet_address:
+            try:
+                async with get_session() as session:
+                    result = await session.execute(
+                        select(wallet_table).where(wallet_table.c.address == wallet_address)
+                    )
+                    db_wallet = result.fetchone()
+                if db_wallet:
+                    wallet_id = db_wallet.id
+            except Exception:
+                pass
+
+    if tx_hash and not persisted_new_trade:
+        logger.debug("Duplicate trade %s — skipping broadcast and Telegram alerts", tx_hash[:16])
+        return
+
+    watcher_user_ids = await _get_watcher_user_ids(wallet_id)
+
     # ── Gemini AI Analysis (non-blocking — fire in background task) ───────
     async def _run_gemini() -> None:
         from services.gemini import analyse_trade  # avoid circular import at module level
@@ -697,7 +745,6 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
         if result:
             mini_report.ai_recommendation = result.get("recommendation")
             mini_report.ai_analysis = result.get("analysis")
-            # Broadcast updated payload with AI fields filled in
             await ws_manager.broadcast({
                 "type": "AI_ANALYSIS",
                 "token_address": token_address,
@@ -705,43 +752,28 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
                 "ai_analysis": mini_report.ai_analysis,
                 "copy_score": mini_report.copy_score,
             })
-            # Send follow-up AI verdict to Telegram channel
             if mini_report.ai_recommendation and mini_report.ai_analysis:
-                await send_trade_alert_ai_followup(
-                    token_symbol=mini_report.symbol or token_address[:8],
-                    token_address=token_address,
-                    recommendation=mini_report.ai_recommendation,
-                    analysis=mini_report.ai_analysis,
-                )
+                now_mono = time.monotonic()
+                for watcher_user_id in watcher_user_ids:
+                    cooldown_key = (watcher_user_id, token_address)
+                    last_ai_ts = _last_watchlist_ai_alerted.get(cooldown_key, 0.0)
+                    if now_mono - last_ai_ts < _WATCHLIST_AI_COOLDOWN_S:
+                        logger.debug(
+                            "Watchlist AI cooldown active for user=%s token=%s",
+                            watcher_user_id,
+                            token_address[:8],
+                        )
+                        continue
+                    _last_watchlist_ai_alerted[cooldown_key] = now_mono
+                    await send_trade_alert_ai_followup(
+                        token_symbol=mini_report.symbol or token_address[:8],
+                        token_address=token_address,
+                        recommendation=mini_report.ai_recommendation,
+                        analysis=mini_report.ai_analysis,
+                        telegram_user_id=watcher_user_id,
+                    )
 
     asyncio.create_task(_run_gemini())
-
-    # ── Persist trade to DB ───────────────────────────────────────────────
-    wallet_id: str | None = None
-    if tx_hash:
-        await _persist_trade(
-            signature=tx_hash,
-            wallet_address=wallet_address,
-            wallet_label=wallet_label,
-            token_address=token_address,
-            token_symbol=mini_report.symbol,
-            side=side.upper(),
-            usd_value=float(usd_value or 0),
-            block_time=block_time,
-            report=mini_report,
-        )
-        # Resolve wallet_id for watchlist alerts
-        if db.is_available() and wallet_address:
-            try:
-                async with get_session() as session:
-                    result = await session.execute(
-                        select(wallet_table).where(wallet_table.c.address == wallet_address)
-                    )
-                    db_wallet = result.fetchone()
-                if db_wallet:
-                    wallet_id = db_wallet.id
-            except Exception:
-                pass
 
     # ── Broadcast to frontend WS clients ─────────────────────────────────
     broadcast_payload = {
@@ -790,7 +822,7 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
     # ── Telegram: per-user watchlist DMs ─────────────────────────────────
     asyncio.create_task(
         _send_watchlist_alerts(
-            wallet_id=wallet_id,
+            watcher_user_ids=watcher_user_ids,
             wallet_label=wallet_label,
             wallet_address=wallet_address or "",
             token_symbol=mini_report.symbol or token_address[:8],
@@ -798,5 +830,6 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
             side=side.upper(),
             usd_value=float(usd_value or 0),
             report=mini_report,
+            copy_score=copy_score,
         )
     )

@@ -101,14 +101,14 @@ async def get_token_overview_route(address: str) -> dict:
         "name":                  data.get("name", "Unknown"),
         "logoURI":               data.get("logoURI") or data.get("logo_uri") or "",
         "price":                 data.get("price") or 0,
-        "priceChange24hPercent": data.get("priceChange24hPercent") or 0,
-        "v24hUSD":               data.get("v24hUSD") or 0,
-        "v24hChangePercent":     data.get("v24hChangePercent") or 0,
-        "mc":                    data.get("mc") or 0,
-        "realMc":                data.get("realMc") or 0,
+        "priceChange24hPercent": data.get("priceChange24hPercent") or data.get("price24hChangePercent") or 0,
+        "v24hUSD":               data.get("v24hUSD") or data.get("volume24hUSD") or 0,
+        "v24hChangePercent":     data.get("v24hChangePercent") or data.get("volume24hChangePercent") or 0,
+        "mc":                    data.get("mc") or data.get("marketCap") or data.get("marketcap") or 0,
+        "realMc":                data.get("realMc") or data.get("fdv") or 0,
         "liquidity":             data.get("liquidity") or 0,
         "holder":                data.get("holder") or 0,
-        "supply":                data.get("supply") or 0,
+        "supply":                data.get("supply") or data.get("totalSupply") or 0,
         "circulatingSupply":     data.get("circulatingSupply") or 0,
         "lastTradeUnixTime":     data.get("lastTradeUnixTime") or 0,
     }
@@ -350,13 +350,8 @@ async def get_overlap() -> list[dict]:
 @router.get("/trending")
 async def get_trending() -> list[dict]:
     """
-    Smart Money Trending — top tokens ranked by a composite smart_score:
-        smart_score = (whale_buy_count * 10) + log1p(volume_24h_usd)
-
-    Fetches top 50 by volume from Birdeye, then cross-references the
-    trade_event_table for whale BUY events in the last 48 h.
-    Degrades gracefully: when DB is unavailable, smart_buy_count = 0 and
-    ranking falls back to pure volume order.
+    Birdeye trending tokens ranked by editorial rank, with Zentryx smart-money
+    metadata attached as supplementary fields.
     """
     try:
         raw = await birdeye.get_token_trending(
@@ -390,7 +385,7 @@ async def get_trending() -> list[dict]:
     result_list: list[dict] = []
     for token in tokens:
         addr = token.get("address") or ""
-        volume = token.get("v24hUSD") or 0
+        volume = token.get("volume24hUSD") or token.get("v24hUSD") or 0
         whale_count = smart_buys.get(addr, 0)
         smart_score = round(whale_count * 10 + math.log1p(volume), 2)
         result_list.append({
@@ -400,11 +395,11 @@ async def get_trending() -> list[dict]:
             "name": token.get("name") or "",
             "logo_uri": token.get("logoURI") or "",
             "price": token.get("price") or 0,
-            "price_change_24h": token.get("priceChange24hPercent") or token.get("price24hChangePercent") or 0,
+            "price_change_24h": token.get("price24hChangePercent") or token.get("priceChange24hPercent") or 0,
             "volume_24h_usd": volume,
-            "volume_change_24h": token.get("v24hChangePercent") or token.get("volume24hChangePercent") or 0,
+            "volume_change_24h": token.get("volume24hChangePercent") or token.get("v24hChangePercent") or 0,
             "liquidity": token.get("liquidity") or 0,
-            "market_cap": token.get("mc") or token.get("marketcap") or 0,
+            "market_cap": token.get("marketcap") or token.get("marketCap") or token.get("mc") or 0,
             "smart_buy_count": whale_count,
             "smart_score": smart_score,
         })

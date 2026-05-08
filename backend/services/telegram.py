@@ -182,6 +182,7 @@ async def send_personal_trade_alert(
     security_score: float | None,
     smart_money: bool,
     momentum_24h: float | None,
+    copy_score: float | None = None,
 ) -> None:
     """Send a trade alert DM to a specific Telegram user (watchlist notification)."""
     bot = _get_bot()
@@ -199,6 +200,11 @@ async def send_personal_trade_alert(
         if security_score is not None
         else "⬜ N/A"
     )
+    if copy_score is not None:
+        cs_emoji = "🟢" if copy_score >= 70 else ("🟡" if copy_score >= 50 else "🔴")
+        cs_str = f"\n{cs_emoji} Copy Score: <b>{copy_score:.0f}/100</b>"
+    else:
+        cs_str = ""
 
     text = (
         f"{side_emoji} <b>Watchlist Alert</b>\n"
@@ -208,7 +214,8 @@ async def send_personal_trade_alert(
         f"\n"
         f"Security: {sec_str}\n"
         f"Smart Money: {'✅ Yes' if smart_money else '—'}\n"
-        f"Momentum: {momentum_str} (24h)\n"
+        f"Momentum: {momentum_str} (24h)"
+        f"{cs_str}\n"
         f"\n"
         f"<a href='{solscan_url}'>View wallet on Solscan</a>"
     )
@@ -230,10 +237,11 @@ async def send_trade_alert_ai_followup(
     token_address: str,
     recommendation: str,
     analysis: str,
+    telegram_user_id: int | None = None,
 ) -> None:
     """Send a follow-up AI verdict message to the personal bot after the initial alert."""
     bot = _get_bot()
-    chat_id = _chat_id()
+    chat_id = str(telegram_user_id) if telegram_user_id is not None else _chat_id()
     if not bot or not chat_id:
         return
 
@@ -719,6 +727,8 @@ async def _handle_help(bot: Bot, update: Update) -> None:
         "/signal [token] — copy score + per-factor breakdown (fast, no AI)\n"
         "/analyze [token] — full AI narrative analysis via Groq (~20s)\n"
         "/close-trade [id] — manually close an open paper trade\n"
+        "/trending — top 5 trending tokens on Solana right now\n"
+        "/new-listings — 5 newest token launches\n"
         "/help — show this message\n\n"
         "🔔 Trade alerts fire automatically when whales move $1,000+.\n"
         "📩 Watchlist alerts are DM'd directly to you for wallets you /watch."
@@ -1416,6 +1426,85 @@ async def _handle_analyze(bot: Bot, update: Update) -> None:
     logger.info("Responded to /analyze for %s from chat %s", token_address[:8], chat_id)
 
 
+async def _handle_trending(bot: Bot, update: Update) -> None:
+    """/trending — show the top 5 trending tokens by Birdeye rank."""
+    chat_id = update.message.chat.id
+    try:
+        from services import birdeye
+        raw = await birdeye.get_token_trending(sort_by="rank", sort_type="asc", offset=0, limit=5)
+        tokens = (raw.get("data") or {}).get("tokens") or []
+    except Exception as exc:
+        await bot.send_message(chat_id=chat_id, text=f"❌ Failed to fetch trending data: {exc}", parse_mode="HTML")
+        return
+
+    if not tokens:
+        await bot.send_message(chat_id=chat_id, text="📊 No trending tokens available right now.", parse_mode="HTML")
+        return
+
+    lines = ["🔥 <b>Top 5 Trending on Solana</b>\n"]
+    for token in tokens[:5]:
+        addr = token.get("address", "")
+        symbol = token.get("symbol") or addr[:8]
+        price = token.get("price") or 0
+        pct = token.get("priceChange24hPercent") or 0
+        rank = token.get("rank") or "?"
+        pct_str = f"{pct:+.2f}%" if pct else "—"
+        pct_emoji = "🟢" if pct > 0 else ("🔴" if pct < 0 else "⬜")
+        price_str = f"${price:.6g}" if price and price < 1 else (f"${price:,.4f}" if price else "—")
+        birdeye_url = f"https://birdeye.so/token/{addr}?chain=solana"
+        lines.append(
+            f"#{rank} <b>${symbol}</b> — {price_str}\n"
+            f"    {pct_emoji} {pct_str} 24h  |  <a href='{birdeye_url}'>Chart</a>"
+        )
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text="\n\n".join(lines),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+    logger.info("Responded to /trending from chat %s", chat_id)
+
+
+async def _handle_new_listings(bot: Bot, update: Update) -> None:
+    """/new-listings — show the 5 most recently created Solana tokens."""
+    chat_id = update.message.chat.id
+    try:
+        from services import birdeye
+        raw = await birdeye.get_new_listings(limit=5, offset=0)
+        tokens = (raw.get("data") or {}).get("items") or []
+    except Exception as exc:
+        await bot.send_message(chat_id=chat_id, text=f"❌ Failed to fetch new listings: {exc}", parse_mode="HTML")
+        return
+
+    if not tokens:
+        await bot.send_message(chat_id=chat_id, text="📊 No new listings available right now.", parse_mode="HTML")
+        return
+
+    lines = ["🆕 <b>5 Newest Solana Token Listings</b>\n"]
+    for token in tokens[:5]:
+        addr = token.get("address") or ""
+        symbol = token.get("symbol") or addr[:8]
+        price = token.get("price") or 0
+        pct = token.get("priceChange24hPercent") or token.get("price24hChangePercent") or 0
+        pct_str = f"{pct:+.2f}%" if pct else "—"
+        pct_emoji = "🟢" if pct > 0 else ("🔴" if pct < 0 else "⬜")
+        price_str = f"${price:.6g}" if price and price < 1 else (f"${price:,.4f}" if price else "—")
+        birdeye_url = f"https://birdeye.so/token/{addr}?chain=solana"
+        lines.append(
+            f"<b>${symbol}</b> — {price_str}\n"
+            f"    {pct_emoji} {pct_str} 24h  |  <a href='{birdeye_url}'>Chart</a>"
+        )
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text="\n\n".join(lines),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+    logger.info("Responded to /new-listings from chat %s", chat_id)
+
+
 async def _handle_close_trade(bot: Bot, update: Update) -> None:
     """/close-trade <id> — manually close an open paper trade at current price."""
     chat_id = update.message.chat.id
@@ -1568,6 +1657,10 @@ async def _dispatch(bot: Bot, update: Update) -> None:
         await _handle_analyze(bot, update)
     elif text.startswith("/close-trade ") or text == "/close-trade":
         await _handle_close_trade(bot, update)
+    elif text.startswith("/trending") or text == "/trending":
+        await _handle_trending(bot, update)
+    elif text.startswith("/new-listings") or text == "/new-listings":
+        await _handle_new_listings(bot, update)
     # Unknown commands silently ignored
 
 
@@ -1582,7 +1675,7 @@ async def run_bot_command_loop() -> None:
         logger.warning("Telegram bot token not set — command loop disabled.")
         return
 
-    logger.info("Telegram command loop started — listening for /start, /wallets, /stats, /top, /wallet, /filter, /watch, /unwatch, /my-wallets, /track, /my-trades, /alert, /my-alerts, /cancel-alert, /signal, /analyze, /close-trade, /help")
+    logger.info("Telegram command loop started — listening for /start, /wallets, /stats, /top, /wallet, /filter, /watch, /unwatch, /my-wallets, /track, /my-trades, /alert, /my-alerts, /cancel-alert, /signal, /analyze, /close-trade, /trending, /new-listings, /help")
     offset: int | None = None
 
     while True:

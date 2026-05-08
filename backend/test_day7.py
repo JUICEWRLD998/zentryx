@@ -143,7 +143,7 @@ def _make_price_mock(changes: dict):
 def test_movers_returns_gainers_and_losers(client):
     """Response must be a dict with 'gainers' and 'losers' list keys."""
     with patch(
-        "services.birdeye.get_trending_tokens",
+        "services.birdeye.get_token_trending",
         new_callable=AsyncMock,
         return_value=MOCK_TOKEN_LIST,
     ), patch(
@@ -167,7 +167,7 @@ def test_movers_item_shape(client):
         "market_cap", "logo_uri",
     }
     with patch(
-        "services.birdeye.get_trending_tokens",
+        "services.birdeye.get_token_trending",
         new_callable=AsyncMock,
         return_value=MOCK_TOKEN_LIST,
     ), patch(
@@ -186,7 +186,7 @@ def test_movers_item_shape(client):
 def test_movers_gainers_sorted_descending(client):
     """Gainers must be sorted by price_change_24h descending."""
     with patch(
-        "services.birdeye.get_trending_tokens",
+        "services.birdeye.get_token_trending",
         new_callable=AsyncMock,
         return_value=MOCK_TOKEN_LIST,
     ), patch(
@@ -204,7 +204,7 @@ def test_movers_gainers_sorted_descending(client):
 def test_movers_losers_are_negative(client):
     """All losers must have price_change_24h < 0."""
     with patch(
-        "services.birdeye.get_trending_tokens",
+        "services.birdeye.get_token_trending",
         new_callable=AsyncMock,
         return_value=MOCK_TOKEN_LIST,
     ), patch(
@@ -226,7 +226,7 @@ def test_movers_losers_sorted_ascending(client):
         "MoverAddr3333333333333333333333333333333333": {"data": {"priceChange24h": -8.0}},
     }
     with patch(
-        "services.birdeye.get_trending_tokens",
+        "services.birdeye.get_token_trending",
         new_callable=AsyncMock,
         return_value=MOCK_TOKEN_LIST,
     ), patch(
@@ -243,7 +243,7 @@ def test_movers_losers_sorted_ascending(client):
 def test_movers_price_change_field_is_numeric(client):
     """price_change_24h must be a float/int (ticker relies on toFixed())."""
     with patch(
-        "services.birdeye.get_trending_tokens",
+        "services.birdeye.get_token_trending",
         new_callable=AsyncMock,
         return_value=MOCK_TOKEN_LIST,
     ), patch(
@@ -265,7 +265,7 @@ def test_movers_skips_tokens_with_no_price_data(client):
         # BETA and GAMMA intentionally omitted → _fetch_price_change returns None
     }
     with patch(
-        "services.birdeye.get_trending_tokens",
+        "services.birdeye.get_token_trending",
         new_callable=AsyncMock,
         return_value=MOCK_TOKEN_LIST,
     ), patch(
@@ -407,7 +407,7 @@ MOCK_TRENDING_MINIMAL = {
 
 def test_regression_trending_still_200(client):
     with patch(
-        "services.birdeye.get_trending_tokens",
+        "services.birdeye.get_token_trending",
         new_callable=AsyncMock,
         return_value=MOCK_TRENDING_MINIMAL,
     ), patch("db.is_available", return_value=False):

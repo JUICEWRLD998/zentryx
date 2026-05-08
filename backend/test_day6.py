@@ -67,23 +67,29 @@ MOCK_TRENDING_RESPONSE = {
         "tokens": [
             {
                 "address": "TokenAddr1111111111111111111111111111111111111",
+                "rank": 1,
                 "symbol": "ALPHA",
                 "name": "Alpha Token",
                 "logoURI": "https://example.com/alpha.png",
                 "price": 0.0042,
-                "v24hUSD": 500_000.0,
+                "price24hChangePercent": 25.5,
+                "volume24hUSD": 500_000.0,
+                "volume24hChangePercent": 150.0,
                 "liquidity": 200_000.0,
-                "mc": 1_000_000.0,
+                "marketcap": 1_000_000.0,
             },
             {
                 "address": "TokenAddr2222222222222222222222222222222222222",
+                "rank": 2,
                 "symbol": "BETA",
                 "name": "Beta Token",
                 "logoURI": "",
                 "price": 0.001,
-                "v24hUSD": 300_000.0,
+                "price24hChangePercent": 12.0,
+                "volume24hUSD": 300_000.0,
+                "volume24hChangePercent": 80.0,
                 "liquidity": 80_000.0,
-                "mc": 500_000.0,
+                "marketcap": 500_000.0,
             },
         ]
     }
@@ -93,7 +99,7 @@ MOCK_TRENDING_RESPONSE = {
 def test_trending_returns_list(client):
     """Trending endpoint should return a JSON array."""
     with patch(
-        "services.birdeye.get_trending_tokens",
+        "services.birdeye.get_token_trending",
         new_callable=AsyncMock,
         return_value=MOCK_TRENDING_RESPONSE,
     ), patch("db.is_available", return_value=False):
@@ -111,7 +117,7 @@ def test_trending_shape(client):
         "smart_buy_count", "smart_score",
     }
     with patch(
-        "services.birdeye.get_trending_tokens",
+        "services.birdeye.get_token_trending",
         new_callable=AsyncMock,
         return_value=MOCK_TRENDING_RESPONSE,
     ), patch("db.is_available", return_value=False):
@@ -126,7 +132,7 @@ def test_trending_shape(client):
 def test_trending_no_db_fallback(client):
     """When DB is unavailable, trending still returns data with smart_buy_count=0."""
     with patch(
-        "services.birdeye.get_trending_tokens",
+        "services.birdeye.get_token_trending",
         new_callable=AsyncMock,
         return_value=MOCK_TRENDING_RESPONSE,
     ), patch("db.is_available", return_value=False):
@@ -136,17 +142,16 @@ def test_trending_no_db_fallback(client):
 
 
 def test_trending_sort_order(client):
-    """Items must be sorted by smart_score descending."""
+    """Items must preserve Birdeye rank order ascending."""
     with patch(
-        "services.birdeye.get_trending_tokens",
+        "services.birdeye.get_token_trending",
         new_callable=AsyncMock,
         return_value=MOCK_TRENDING_RESPONSE,
     ), patch("db.is_available", return_value=False):
         res = client.get("/api/trending")
     body = res.json()
-    scores = [item["smart_score"] for item in body]
-    assert scores == sorted(scores, reverse=True), \
-        f"Items not sorted by smart_score desc: {scores}"
+    ranks = [item["rank"] for item in body]
+    assert ranks == sorted(ranks), f"Items not sorted by rank asc: {ranks}"
 
 
 # ── New Listings Endpoint ─────────────────────────────────────────────────────
