@@ -239,10 +239,19 @@ async def send_trade_alert_ai_followup(
     recommendation: str,
     analysis: str,
     telegram_user_id: int | None = None,
+    to_group: bool = False,
 ) -> None:
-    """Send a follow-up AI verdict message to the personal bot after the initial alert."""
+    """Send a follow-up AI verdict message after the initial trade alert.
+
+    If to_group=True, sends to the shared group/channel instead of a user DM.
+    If telegram_user_id is set, sends to that user's DM.
+    Otherwise falls back to the owner personal chat.
+    """
     bot = _get_bot()
-    chat_id = str(telegram_user_id) if telegram_user_id is not None else _chat_id()
+    if to_group:
+        chat_id = _group_chat_id()
+    else:
+        chat_id = str(telegram_user_id) if telegram_user_id is not None else _chat_id()
     if not bot or not chat_id:
         return
 

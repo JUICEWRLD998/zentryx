@@ -773,6 +773,15 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
                         telegram_user_id=watcher_user_id,
                     )
 
+                # Also send AI analysis to the shared group channel
+                await send_trade_alert_ai_followup(
+                    token_symbol=mini_report.symbol or token_address[:8],
+                    token_address=token_address,
+                    recommendation=mini_report.ai_recommendation,
+                    analysis=mini_report.ai_analysis,
+                    to_group=True,
+                )
+
     asyncio.create_task(_run_gemini())
 
     # ── Broadcast to frontend WS clients ─────────────────────────────────
