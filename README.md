@@ -13,9 +13,9 @@ Zentryx started as a copy-trading terminal and now operates as a broader intelli
 ## What Zentryx Does
 
 ### 1) Wallet Intelligence
-- Discovers top wallets from Birdeye gainers/losers
-- Applies PnL and win-rate qualification filters
-- Maintains ranked tracked-wallet leaderboard
+- Seeds candidate wallets from Birdeye weekly gainers/losers (1W, PnL-ranked sample)
+- Applies qualification filters: positive PnL, minimum win rate, and minimum trade count
+- Maintains ranked tracked-wallet leaderboard by qualified PnL
 - Persists wallets and periodic snapshots for historical views
 
 ### 2) Real-Time Trade Intelligence
@@ -88,6 +88,7 @@ Wallets:
 - POST /api/wallets/discover
 
 Tokens and Discovery:
+- GET /api/tokens/{address}/mini-report
 - GET /api/tokens/{address}/ohlcv
 - GET /api/tokens/{address}/overview
 - GET /api/tokens/{address}/insight
@@ -109,6 +110,35 @@ Trades and Alerts:
 
 Live Stream:
 - WS /ws/feed
+
+## Wallet Ranking Methodology
+
+Current tracked-wallet ranking is intentionally conservative and compute-budget aware.
+
+Data source:
+- Candidate wallets come from Birdeye gainers/losers using 1W timeframe and PnL sort.
+- Birdeye currently caps this response to a small candidate set per call.
+
+Qualification filters:
+- Positive total PnL
+- Minimum win-rate threshold
+- Minimum trade-count threshold
+
+Ranking and persistence:
+- Qualified wallets are ranked by total PnL descending.
+- Leaderboard labels are assigned as Whale #1, Whale #2, etc.
+- Results are kept in memory for low-latency reads and upserted to PostgreSQL.
+
+What this means in practice:
+- Zentryx tracks a high-signal sampled cohort of top-performing wallets, not an exhaustive global ranking of all Solana wallets.
+- This is a deliberate hackathon tradeoff for reliability, speed, and API efficiency.
+
+## Why This Is Hackathon-Ready
+
+- End-to-end working system across ingestion, enrichment, storage, API, frontend, and Telegram operations
+- Real-time Solana monitoring plus risk-aware token intelligence and AI commentary
+- Practical trader workflow coverage: discovery, alerts, watchlists, paper trading, and performance stats
+- Clear production-minded constraints documented (API contract variance, sampled ranking model)
 
 ## Telegram Bot Commands
 
@@ -149,7 +179,6 @@ The Birdeye client includes wallet, token, discovery, and smart-money endpoints 
 Key endpoints in active workflows include:
 - /trader/gainers-losers
 - /wallet/v2/pnl/summary
-- /wallet/v2/pnl/multiple
 - /wallet/v2/net-worth
 - /v1/wallet/token_list
 - /defi/token_overview
@@ -165,6 +194,9 @@ Key endpoints in active workflows include:
 - /defi/token_trending
 - /defi/v2/tokens/new_listing
 - /smart-money/v1/token/list
+
+Implemented but currently not used in production discovery path:
+- /wallet/v2/pnl/multiple (disabled in discovery due unstable response contract in live usage)
 
 ## Getting Started
 
@@ -275,7 +307,7 @@ Expected:
 
 - Startup includes wallet discovery, scheduler bootstrap, Telegram command loop, and price monitor task.
 - If you change backend routes/services, restart uvicorn to avoid stale runtime behavior.
-- The wallet discovery batch PnL call uses Birdeye wallet parameterization expected by /wallet/v2/pnl/multiple.
+- Discovery currently uses per-wallet /wallet/v2/pnl/summary calls for reliability in production.
 - AI insights are additive: platform remains functional without Groq responses.
 
 ## Deployment

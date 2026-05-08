@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/sheet";
 
 const TELEGRAM_BOT_URL = "https://t.me/zentryxtrade_bot";
+const SIGNALS_GROUP_URL = "https://t.me/+P5bl6rrFhs4wYTE0";
 
 type NavPage =
   | "leaderboard"
@@ -68,6 +69,14 @@ export function NavBar({ activePage, showCta = false }: NavBarProps) {
             </Link>
           )
         )}
+        <a
+          href={SIGNALS_GROUP_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hover:text-foreground transition-colors"
+        >
+          SIGNALS
+        </a>
         <a
           href={TELEGRAM_BOT_URL}
           target="_blank"
@@ -151,6 +160,15 @@ export function NavBar({ activePage, showCta = false }: NavBarProps) {
               ))}
 
               <div className="border-t border-border/60 mt-2 pt-2">
+                <a
+                  href={SIGNALS_GROUP_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setOpen(false)}
+                  className="flex items-center gap-3 px-3 py-2.5 rounded-md font-mono text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground transition-colors"
+                >
+                  SIGNALS GROUP
+                </a>
                 <a
                   href={TELEGRAM_BOT_URL}
                   target="_blank"

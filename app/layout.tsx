@@ -21,8 +21,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Zentryx — Copy-Trading Intelligence",
-  description: "Real-time on-chain whale tracking and copy-trading signals on Solana.",
+  title: "Zentryx — Solana Intelligence Platform",
+  description: "Real-time whale tracking, token intelligence, trending discovery, and actionable alerts on Solana.",
 };
 
 export default function RootLayout({

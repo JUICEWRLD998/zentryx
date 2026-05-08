@@ -13,6 +13,7 @@ import {
   ArrowRight,
   Activity,
   Layers,
+  Radar,
 } from "lucide-react";
 import { NavBar } from "@/components/navbar";
 
@@ -90,28 +91,38 @@ const FEATURES = [
     border: "hover:border-blue-400/40",
     external: true,
   },
+  {
+    icon: Radar,
+    title: "Trending Radar",
+    description:
+      "Track the most active Solana tokens with ranked momentum, volume, liquidity, and smart-money context in one place.",
+    href: "/trending",
+    cta: "Open Trending →",
+    accent: "text-orange-400",
+    border: "hover:border-orange-400/40",
+  },
 ];
 
 const HOW_IT_WORKS = [
   {
     step: "01",
     icon: TrendingUp,
-    title: "AI Discovers Top Wallets",
-    body: "Zentryx scans Solana's weekly top performers using on-chain PnL and win-rate data, automatically selecting the wallets that consistently beat the market.",
+    title: "AI Maps Winning Wallets",
+    body: "Zentryx scans Solana's top performers using on-chain PnL and win-rate signals, then continuously refreshes a high-conviction wallet universe.",
     accent: "text-buy",
   },
   {
     step: "02",
     icon: Zap,
-    title: "Signals Fire in Real Time",
-    body: "When a tracked whale makes a large trade, Zentryx enriches it with token security data, smart money flags, and momentum metrics — then surfaces it instantly.",
+    title: "Signals Are Enriched Instantly",
+    body: "When a tracked whale moves, Zentryx enriches the event with token security, smart money context, momentum, and discovery metrics in seconds.",
     accent: "text-cyan",
   },
   {
     step: "03",
     icon: Bell,
-    title: "You Copy With Confidence",
-    body: "Act on intelligence, not noise. Check token security scores and honeypot detection before you follow. Every alert includes who moved, what they bought, how much, and whether the token is safe to enter.",
+    title: "You Decide With Context",
+    body: "Act on intelligence, not noise. Every alert combines who moved, what changed, risk flags, and market structure so you can make higher-quality decisions.",
     accent: "text-violet-400",
   },
 ];
@@ -254,9 +265,8 @@ export default function Landing() {
             </h1>
 
             <p className="text-muted-foreground text-lg sm:text-xl max-w-2xl mx-auto mb-10 leading-relaxed">
-              Zentryx tracks Solana&apos;s top-performing wallets in real time. Surface live whale trades,
-              scan new token listings, and get Telegram alerts the
-              instant a whale moves.
+              Zentryx tracks Solana&apos;s top-performing wallets in real time, then layers token security,
+              smart-money flow, trending discovery, and Telegram-ready alerts so you can act with conviction.
             </p>
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
@@ -348,7 +358,7 @@ export default function Landing() {
               <p className="font-mono text-xs text-muted-foreground tracking-widest mb-3">PLATFORM</p>
               <h2 className="font-mono text-3xl font-bold text-foreground">
                 Everything You Need to{" "}
-                <span className="text-cyan">Copy Smarter</span>
+                <span className="text-cyan">Read Smart Money</span>
               </h2>
             </div>
 
@@ -401,8 +411,8 @@ export default function Landing() {
                   Follow the Smart Money.
                 </h2>
                 <p className="text-muted-foreground mb-8 leading-relaxed">
-                  The best traders don&apos;t guess — they follow wallets with proven track records.
-                  Zentryx makes that intelligence available to everyone.
+                  The best traders don&apos;t guess — they follow verifiable behavior.
+                  Zentryx turns live wallet activity, token risk data, and discovery signals into actionable market intelligence.
                 </p>
                 <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
                   <Link
@@ -412,10 +422,10 @@ export default function Landing() {
                     Open Dashboard <ArrowRight size={14} />
                   </Link>
                   <Link
-                    href="/live"
+                    href="/trending"
                     className="inline-flex items-center gap-2 rounded-lg border border-border font-mono font-semibold text-sm px-6 py-3 text-foreground hover:border-foreground/40 transition-colors"
                   >
-                    <Activity size={14} /> Watch Live Feed
+                    <TrendingUp size={14} /> Open Trending
                   </Link>
                 </div>
               </div>
@@ -433,7 +443,7 @@ export default function Landing() {
           </div>
           <nav className="flex items-center gap-5 font-mono text-xs text-muted-foreground">
             <Link href="/dashboard" className="hover:text-foreground transition-colors">Dashboard</Link>
-            <Link href="/live" className="hover:text-foreground transition-colors">Live Feed</Link>
+            <Link href="/trending" className="hover:text-foreground transition-colors">Trending</Link>
             <a href={TELEGRAM_BOT_URL} target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">Telegram Bot</a>
           </nav>
           <p className="font-mono text-xs text-muted-foreground">Built on Solana · {new Date().getFullYear()}</p>
