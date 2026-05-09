@@ -123,6 +123,7 @@ Qualification filters:
 - Positive total PnL
 - Minimum win-rate threshold
 - Minimum trade-count threshold
+- Must have current non-dust holdings 
 
 Ranking and persistence:
 - Qualified wallets are ranked by total PnL descending.
@@ -131,6 +132,7 @@ Ranking and persistence:
 
 What this means in practice:
 - Zentryx tracks a high-signal sampled cohort of top-performing wallets, not an exhaustive global ranking of all Solana wallets.
+- Wallets that are historically strong but currently hold no active positions can be filtered out of the tracked set.
 - This is a deliberate hackathon tradeoff for reliability, speed, and API efficiency.
 - 
 ## Telegram Bot Commands

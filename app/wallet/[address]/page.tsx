@@ -71,6 +71,7 @@ export default function WalletPage() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"overview" | "portfolio">("overview");
   const [portfolio, setPortfolio] = useState<PortfolioItem[]>([]);
+  const [portfolioAddress, setPortfolioAddress] = useState<string | null>(null);
   const [portfolioLoading, setPortfolioLoading] = useState(false);
   const [portfolioError, setPortfolioError] = useState<string | null>(null);
 
@@ -91,8 +92,15 @@ export default function WalletPage() {
   }, [address]);
 
   useEffect(() => {
+    if (!address) return;
+    setPortfolio([]);
+    setPortfolioAddress(null);
+    setPortfolioError(null);
+  }, [address]);
+
+  useEffect(() => {
     if (tab !== "portfolio" || !address) return;
-    if (portfolio.length > 0) return; // already loaded
+    if (portfolioAddress === address) return; // already loaded for this wallet
     const load = async () => {
       setPortfolioLoading(true);
       setPortfolioError(null);
@@ -100,6 +108,7 @@ export default function WalletPage() {
         const res = await fetch(`${API_BASE}/api/wallets/${address}/portfolio`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         setPortfolio(await res.json());
+        setPortfolioAddress(address);
       } catch (e) {
         setPortfolioError(String(e));
       } finally {
@@ -107,7 +116,7 @@ export default function WalletPage() {
       }
     };
     load();
-  }, [tab, address]);
+  }, [tab, address, portfolioAddress]);
 
   const shortAddr = address
     ? `${address.slice(0, 6)}...${address.slice(-4)}`
