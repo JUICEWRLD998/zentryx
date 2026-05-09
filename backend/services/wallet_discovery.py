@@ -36,6 +36,52 @@ _BATCH_SIZE = 10
 _INTER_BATCH_DELAY = 2.0  # seconds between batch calls for rate limiting
 
 
+def _as_float(value: object) -> float:
+    """Best-effort numeric parsing for API fields that may arrive as strings."""
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+
+
+async def _has_meaningful_holdings(address: str, min_usd: float = 0.01) -> bool:
+    """
+    Return True when a wallet has at least one non-dust holding.
+
+    If the holdings endpoint fails, keep the wallet to avoid dropping whales
+    due to transient upstream issues.
+    """
+    try:
+        raw = await birdeye.get_wallet_portfolio(address)
+    except Exception as exc:
+        logger.warning(
+            "Portfolio check failed for %s, keeping wallet as fallback: %s",
+            address[:8],
+            exc,
+        )
+        return True
+
+    data = raw.get("data") or {}
+    items = data.get("items") or data.get("tokens") or []
+    if not isinstance(items, list):
+        return True
+
+    for item in items:
+        usd_value = _as_float(
+            item.get("valueUsd")
+            or item.get("valueUSD")
+            or item.get("value_usd")
+            or item.get("value")
+        )
+        amount = _as_float(
+            item.get("uiAmount") or item.get("amount") or item.get("tokenAmount")
+        )
+        if usd_value >= min_usd or amount > 0:
+            return True
+
+    return False
+
+
 def _parse_pnl_item(item: dict) -> tuple[float, float, int]:
     """
     Parse (total_pnl, win_rate, trade_count) from a Birdeye PnL item.
@@ -212,9 +258,27 @@ async def discover_wallets() -> None:
     qualified.sort(key=lambda x: x["total_pnl"], reverse=True)
     top15 = qualified[:15]
 
+    # ── Keep only wallets with visible current holdings ──────────────────
+    active_wallets: list[dict] = []
+    for wallet in top15:
+        await asyncio.sleep(0.5)
+        if await _has_meaningful_holdings(wallet["address"]):
+            active_wallets.append(wallet)
+        else:
+            logger.info(
+                "Excluding wallet %s from tracked list: no current holdings.",
+                wallet["address"][:8],
+            )
+
+    if not active_wallets:
+        logger.warning(
+            "All wallets had empty holdings; falling back to PnL-ranked list."
+        )
+        active_wallets = top15
+
     # ── Update in-memory store ────────────────────────────────────────────
     new_wallets: dict[str, TrackedWallet] = {}
-    for rank, wallet in enumerate(top15, start=1):
+    for rank, wallet in enumerate(active_wallets, start=1):
         new_wallets[wallet["address"]] = TrackedWallet(
             address=wallet["address"],
             label=f"Whale #{rank}",
@@ -244,7 +308,7 @@ async def discover_wallets() -> None:
     if db.is_available():
         upserted = 0
         now = datetime.now(tz=timezone.utc)
-        for rank, wallet in enumerate(top15, start=1):
+        for rank, wallet in enumerate(active_wallets, start=1):
             label = f"Whale #{rank}"
             try:
                 stmt = (
@@ -277,7 +341,7 @@ async def discover_wallets() -> None:
                 logger.warning(
                     "DB upsert failed for %s: %s", wallet["address"][:8], exc
                 )
-        logger.info("Persisted %d/%d wallets to database.", upserted, len(top15))
+        logger.info("Persisted %d/%d wallets to database.", upserted, len(active_wallets))
 
 
 def get_tracked_wallets() -> list[TrackedWallet]:

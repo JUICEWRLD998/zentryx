@@ -60,6 +60,7 @@ class TestWalletDiscoveryResubscribe:
                  ("new-wallet-a", _make_summary(total_pnl=3000.0)),
                  ("new-wallet-b", _make_summary(total_pnl=2000.0)),
              ])), \
+             patch("services.wallet_discovery.birdeye.get_wallet_portfolio", new=AsyncMock(return_value={"data": {"items": [{"valueUsd": 10.0}]}})), \
              patch("services.wallet_discovery.db.is_available", return_value=False), \
              patch("services.solana_rpc_ws.request_resubscribe") as mock_request:
             await wd.discover_wallets()
@@ -81,6 +82,7 @@ class TestWalletDiscoveryResubscribe:
                  ("wallet-a", _make_summary(total_pnl=4000.0)),
                  ("wallet-b", _make_summary(total_pnl=1000.0)),
              ])), \
+             patch("services.wallet_discovery.birdeye.get_wallet_portfolio", new=AsyncMock(return_value={"data": {"items": [{"valueUsd": 10.0}]}})), \
              patch("services.wallet_discovery.db.is_available", return_value=False), \
              patch("services.solana_rpc_ws.request_resubscribe") as mock_request:
             await wd.discover_wallets()
@@ -111,3 +113,45 @@ class TestSolanaWsReconnect:
 
         assert call_count == 2, "WS loop did not reconnect immediately after resubscribe"
         assert mock_sleep.await_count == 0, "WS loop slept instead of reconnecting immediately"
+
+
+class TestWalletDiscoveryActiveHoldings:
+
+    @pytest.mark.asyncio
+    async def test_empty_portfolio_wallet_is_excluded_from_tracked_set(self):
+        import services.wallet_discovery as wd
+
+        wd.tracked_wallets = {}
+
+        async def fake_portfolio(wallet_address: str):
+            if wallet_address == "wallet-empty":
+                return {"data": {"items": []}}
+            return {"data": {"items": [{"valueUsd": 12.0}]}}
+
+        with patch("services.wallet_discovery.birdeye.get_gainers_losers", new=AsyncMock(return_value=_make_gainers(["wallet-empty", "wallet-active"]))), \
+             patch("services.wallet_discovery._fetch_pnl_batch", new=AsyncMock(return_value=[
+                 ("wallet-empty", _make_summary(total_pnl=3500.0)),
+                 ("wallet-active", _make_summary(total_pnl=3200.0)),
+             ])), \
+             patch("services.wallet_discovery.birdeye.get_wallet_portfolio", new=AsyncMock(side_effect=fake_portfolio)), \
+             patch("services.wallet_discovery.db.is_available", return_value=False):
+            await wd.discover_wallets()
+
+        assert set(wd.tracked_wallets.keys()) == {"wallet-active"}
+
+    @pytest.mark.asyncio
+    async def test_discovery_falls_back_when_all_portfolios_are_empty(self):
+        import services.wallet_discovery as wd
+
+        wd.tracked_wallets = {}
+
+        with patch("services.wallet_discovery.birdeye.get_gainers_losers", new=AsyncMock(return_value=_make_gainers(["wallet-a", "wallet-b"]))), \
+             patch("services.wallet_discovery._fetch_pnl_batch", new=AsyncMock(return_value=[
+                 ("wallet-a", _make_summary(total_pnl=4500.0)),
+                 ("wallet-b", _make_summary(total_pnl=2500.0)),
+             ])), \
+             patch("services.wallet_discovery.birdeye.get_wallet_portfolio", new=AsyncMock(return_value={"data": {"items": []}})), \
+             patch("services.wallet_discovery.db.is_available", return_value=False):
+            await wd.discover_wallets()
+
+        assert set(wd.tracked_wallets.keys()) == {"wallet-a", "wallet-b"}
