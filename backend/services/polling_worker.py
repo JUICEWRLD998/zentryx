@@ -19,7 +19,7 @@ from services import birdeye
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECS = 60          # how often to poll each token (1 minute)
-MIN_VALUE_USD = 50               # minimum trade size to emit
+MIN_VALUE_USD = 1_000            # minimum trade size to emit ($1,000)
 MAX_SEEN: int = 5_000            # cap on dedup cache
 TOKEN_POLL_DELAY = 2.0           # seconds between consecutive token polls (sequential, not parallel)
 TRENDING_REFRESH_SECS = 900      # refresh trending token list every 15 minutes

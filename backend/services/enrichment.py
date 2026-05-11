@@ -56,6 +56,7 @@ _consensus_tracker: dict[str, list[tuple[str, float]]] = defaultdict(list)
 # Stores monotonic timestamp of the last time a channel alert was sent per token.
 _ALERT_COOLDOWN_S: float = 300.0     # 5 minutes between alerts for the same token
 _last_alerted: dict[str, float] = {} # { token_address: monotonic_ts }
+_MIN_ALERT_USD: float = 1_000.0      # minimum trade size to fire a Telegram alert
 
 # Per-user watchlist AI cooldown — avoids repeated verdict spam for the same token.
 _WATCHLIST_AI_COOLDOWN_S: float = 300.0
@@ -801,6 +802,15 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
 
     # ── Telegram: shared channel alert ───────────────────────────────────
     shared_channel_alert_sent = False
+    _trade_usd = float(usd_value or 0)
+    if _trade_usd < _MIN_ALERT_USD:
+        logger.debug(
+            "Trade value $%.0f below minimum $%.0f — skipping Telegram alert for %s",
+            _trade_usd, _MIN_ALERT_USD, mini_report.symbol or token_address[:8],
+        )
+        asyncio.create_task(_run_gemini(False))
+        return
+
     now_mono = time.monotonic()
     last_alert_ts = _last_alerted.get(token_address, 0.0)
     if now_mono - last_alert_ts >= _ALERT_COOLDOWN_S:
@@ -813,7 +823,7 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
                 token_symbol=mini_report.symbol or token_address[:8],
                 token_address=token_address,
                 side=side.upper(),
-                usd_value=float(usd_value or 0),
+                usd_value=_trade_usd,
                 security_score=mini_report.security_score,
                 smart_money=mini_report.smart_money_flag,
                 momentum_24h=mini_report.momentum_24h,

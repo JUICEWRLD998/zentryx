@@ -504,6 +504,7 @@ async def _handle_start(bot: Bot, update: Update) -> None:
         "/my-trades — view your paper trade positions\n"
         "/trending — top 5 trending Solana tokens\n"
         "/newlisting — 5 newest token launches\n"
+        "/holdings [token] — which whales hold a token\n"
         "/help — show this message\n\n"
         "🔔 Trade alerts fire automatically when whales move $1,000+.\n"
         "📩 Watchlist alerts are DM'd directly to you."
@@ -742,6 +743,7 @@ async def _handle_help(bot: Bot, update: Update) -> None:
         "/trending — top 5 trending tokens on Solana right now\n"
         "/newlisting — 5 newest token launches (menu command)\n"
         "Alias: /new-listings also works\n"
+        "/holdings [token] — which tracked whales hold a token\n"
         "/help — show this message\n\n"
         "🔔 Trade alerts fire automatically when whales move $1,000+.\n"
         "📩 Watchlist alerts are DM'd directly to you for wallets you /watch."
@@ -1528,7 +1530,118 @@ async def _handle_new_listings(bot: Bot, update: Update) -> None:
     logger.info("Responded to /new-listings from chat %s", chat_id)
 
 
-async def _handle_close_trade(bot: Bot, update: Update) -> None:
+async def _handle_holdings(bot: Bot, update: Update) -> None:
+    """/holdings <token> — show which tracked whales currently hold a specific token."""
+    chat_id = update.message.chat.id
+    parts = (update.message.text or "").strip().split(maxsplit=1)
+
+    if len(parts) < 2 or not parts[1].strip():
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "ℹ️ Usage: <code>/holdings &lt;token&gt;</code>\n\n"
+                "Examples:\n"
+                "  <code>/holdings BONK</code>\n"
+                "  <code>/holdings DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263</code>\n\n"
+                "Checks which tracked whale wallets currently hold the token."
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    query = parts[1].strip()
+
+    from services.wallet_discovery import tracked_wallets
+    wallets = list(tracked_wallets.values())
+    if not wallets:
+        await bot.send_message(chat_id=chat_id, text="⚠️ No tracked wallets loaded yet.", parse_mode="HTML")
+        return
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text=f"🔍 Checking {len(wallets)} whale wallets for <b>{html.escape(query)}</b>…",
+        parse_mode="HTML",
+    )
+
+    from services import birdeye
+
+    # Determine if query is a token address or symbol
+    query_is_address = len(query) > 30
+    query_lower = query.lower()
+
+    holders: list[tuple[str, float]] = []   # (label, usd_value)
+    non_holders: list[str] = []
+
+    for wallet in wallets:
+        try:
+            raw = await birdeye.get_wallet_portfolio(wallet.address)
+            items: list[dict] = (raw.get("data") or {}).get("items") or []
+        except Exception as exc:
+            logger.debug("Failed to fetch portfolio for %s: %s", wallet.address, exc)
+            continue
+
+        matched_usd = 0.0
+        for item in items:
+            item_address = (item.get("address") or item.get("mint") or "").lower()
+            item_symbol = (item.get("symbol") or "").lower()
+            if query_is_address:
+                match = item_address == query_lower
+            else:
+                match = item_symbol == query_lower
+            if match:
+                matched_usd = float(
+                    item.get("valueUsd") or item.get("usdValue") or item.get("value") or 0
+                )
+                break
+
+        if matched_usd > 0:
+            holders.append((wallet.label, matched_usd))
+        else:
+            non_holders.append(wallet.label)
+
+    if not holders:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"❌ <b>No tracked whales hold {html.escape(query)}</b>\n\n"
+                f"None of the {len(wallets)} tracked wallets currently hold this token."
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    # Sort holders by USD value descending
+    holders.sort(key=lambda x: x[1], reverse=True)
+    total_holders = len(holders)
+    coverage_pct = (total_holders / len(wallets)) * 100
+
+    cov_emoji = "🔥" if coverage_pct >= 75 else ("⚡" if coverage_pct >= 50 else "💡")
+    lines = [
+        f"{cov_emoji} <b>Whale Holdings: {html.escape(query)}</b>\n"
+        f"<b>{total_holders}/{len(wallets)}</b> tracked whales holding this token ({coverage_pct:.0f}%)"
+    ]
+
+    for label, usd_val in holders:
+        usd_str = f"${usd_val:,.0f}" if usd_val >= 1 else f"${usd_val:.4f}"
+        safe_label = html.escape(label)
+        lines.append(f"  ✅ <b>{safe_label}</b> — {usd_str}")
+
+    if non_holders:
+        lines.append(f"\n<i>Not holding: {', '.join(html.escape(l) for l in non_holders)}</i>")
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text="\n".join(lines),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+    logger.info(
+        "Responded to /holdings %s from chat %s — %d/%d whales holding",
+        query, chat_id, total_holders, len(wallets),
+    )
+
+
+async def _dispatch(bot: Bot, update: Update) -> None:
     """/close-trade <id> — manually close an open paper trade at current price."""
     chat_id = update.message.chat.id
     telegram_user_id = update.message.from_user.id
@@ -1682,6 +1795,8 @@ async def _dispatch(bot: Bot, update: Update) -> None:
         await _handle_close_trade(bot, update)
     elif text.startswith("/trending") or text.startswith("/trendings"):
         await _handle_trending(bot, update)
+    elif text.startswith("/holdings ") or text == "/holdings":
+        await _handle_holdings(bot, update)
     elif (
         text.startswith("/new-listings")
         or text.startswith("/new_listings")
@@ -1705,6 +1820,7 @@ async def _register_commands(bot: Bot) -> None:
             BotCommand("analyze", "AI token analysis (Groq)"),
             BotCommand("trending", "Top 5 trending tokens"),
             BotCommand("newlisting", "5 newest token launches"),
+            BotCommand("holdings", "Check which whales hold a token"),
             BotCommand("help", "Show all commands"),
         ]
         # Register in both default and private scopes so commands appear reliably.
@@ -1727,7 +1843,7 @@ async def run_bot_command_loop() -> None:
         return
 
     await _register_commands(bot)
-    logger.info("Telegram command loop started — listening for /start, /wallets, /stats, /top, /wallet, /filter, /watch, /unwatch, /my-wallets, /track, /my-trades, /alert, /my-alerts, /cancel-alert, /signal, /analyze, /close-trade, /trending, /trendings, /newlisting, /new-listings, /newlistings, /help")
+    logger.info("Telegram command loop started — listening for /start, /wallets, /stats, /top, /wallet, /filter, /watch, /unwatch, /my-wallets, /track, /my-trades, /alert, /my-alerts, /cancel-alert, /signal, /analyze, /close-trade, /trending, /trendings, /newlisting, /new-listings, /newlistings, /holdings, /help")
     offset: int | None = None
 
     while True:
