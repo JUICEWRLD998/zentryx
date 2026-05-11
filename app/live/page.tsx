@@ -17,6 +17,12 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 type MiniReport = TradeEvent["mini_report"];
 
+/** Map of token_address → return_pct from signal_stats cache */
+type OutcomeMap = Record<string, number>;
+
+/** Set of token addresses involved in recent whale rotations */
+type RotationSet = Set<string>;
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function fmtUsd(n: number | null | undefined): string {
@@ -60,9 +66,13 @@ function ScoreBar({ label, value, color }: { label: string; value: string; color
 
 function TradeCard({
   event,
+  outcomeMap,
+  rotationSet,
   onClick,
 }: {
   event: TradeEvent;
+  outcomeMap: OutcomeMap;
+  rotationSet: RotationSet;
   onClick: (e: TradeEvent) => void;
 }) {
   const isBuy = event.side === "BUY";
@@ -82,6 +92,9 @@ function TradeCard({
       : "text-sell";
   const momColor =
     momentum == null ? "text-muted-foreground" : momentum >= 0 ? "text-buy" : "text-sell";
+
+  const outcomePct = outcomeMap[event.token_address];
+  const isRotation = rotationSet.has(event.token_address);
 
   return (
     <motion.div
@@ -120,6 +133,22 @@ function TradeCard({
           )}
           {event.mini_report?.smart_money_flag && (
             <span className="text-xs text-cyan">◆ Smart $</span>
+          )}
+          {isRotation && (
+            <span className="rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wider bg-yellow-400/15 text-yellow-400">
+              ROTATION
+            </span>
+          )}
+          {outcomePct != null && isBuy && (
+            <span
+              className={`rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wider ${
+                outcomePct >= 0
+                  ? "bg-buy/15 text-buy"
+                  : "bg-sell/15 text-sell"
+              }`}
+            >
+              {outcomePct >= 0 ? "+" : ""}{outcomePct.toFixed(1)}%
+            </span>
           )}
           <span className="text-xs text-muted-foreground/50">DETAILS →</span>
         </div>
@@ -343,6 +372,49 @@ export default function LivePage() {
   const { events, status, clearEvents } = useWebSocket(WS_URL);
   const [selected, setSelected] = useState<TradeEvent | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [outcomeMap, setOutcomeMap] = useState<OutcomeMap>({});
+  const [rotationSet, setRotationSet] = useState<RotationSet>(new Set());
+
+  // Fetch signal outcomes — refreshes every 10 min
+  useEffect(() => {
+    const load = () => {
+      fetch(`${API_BASE}/api/signals/stats`)
+        .then((r) => r.ok ? r.json() : null)
+        .then((d) => {
+          if (!d?.top_performers) return;
+          const map: OutcomeMap = {};
+          for (const p of d.top_performers) {
+            map[p.address] = p.return_pct;
+          }
+          setOutcomeMap(map);
+        })
+        .catch(() => {});
+    };
+    load();
+    const id = setInterval(load, 600_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Fetch rotations — refreshes every 5 min
+  useEffect(() => {
+    const load = () => {
+      fetch(`${API_BASE}/api/rotations`)
+        .then((r) => r.ok ? r.json() : null)
+        .then((d) => {
+          if (!d?.rotations) return;
+          const tokens = new Set<string>();
+          for (const r of d.rotations) {
+            tokens.add(r.from_token);
+            tokens.add(r.to_token);
+          }
+          setRotationSet(tokens);
+        })
+        .catch(() => {});
+    };
+    load();
+    const id = setInterval(load, 300_000);
+    return () => clearInterval(id);
+  }, []);
 
   const handleCardClick = useCallback((event: TradeEvent) => {
     setSelected(event);
@@ -396,6 +468,8 @@ export default function LivePage() {
                 <TradeCard
                   key={`${e.tx_hash ?? e.token_address}-${i}`}
                   event={e}
+                  outcomeMap={outcomeMap}
+                  rotationSet={rotationSet}
                   onClick={handleCardClick}
                 />
               ))}

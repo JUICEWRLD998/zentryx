@@ -33,6 +33,7 @@ from routers.ws import router as ws_router
 from routers.trades import router as trades_router
 from routers.tokens import router as tokens_router
 from routers.smart_money import router as smart_money_router
+from routers.analytics import router as analytics_router
 from scheduler import scheduler
 from services.birdeye_ws import run_birdeye_ws
 from services.polling_worker import run_polling_worker
@@ -114,6 +115,7 @@ app.include_router(ws_router)
 app.include_router(trades_router)
 app.include_router(tokens_router)
 app.include_router(smart_money_router)
+app.include_router(analytics_router)
 
 
 @app.get("/health")

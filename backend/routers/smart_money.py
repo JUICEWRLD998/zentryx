@@ -108,6 +108,8 @@ async def _build_heatmap(limit: int = 20) -> dict[str, Any]:
     return {"tokens": tokens, "generated_at": int(time.time())}
 
 
+# ── Heatmap ───────────────────────────────────────────────────────────────────
+
 @router.get("/heatmap")
 async def get_smart_money_heatmap(limit: int = 20) -> dict[str, Any]:
     """Return smart money inflow/outflow heatmap for top tokens.

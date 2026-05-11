@@ -1831,6 +1831,59 @@ async def _register_commands(bot: Bot) -> None:
         logger.warning("Failed to register Telegram commands: %s", exc)
 
 
+async def send_rotation_alert(
+    *,
+    wallet_label: str,
+    from_symbol: str,
+    from_token: str,
+    to_symbol: str,
+    to_token: str,
+    from_usd: float,
+    to_usd: float,
+) -> None:
+    """
+    Send a ROTATION DETECTED alert to the configured group/channel.
+
+    Called by the rotation detector whenever a wallet exits one token and
+    enters a new position within the 4-hour detection window.
+    """
+    bot = _get_bot()
+    chat_id = _group_chat_id()
+    if not bot or not chat_id:
+        logger.debug("Telegram not configured — skipping rotation alert.")
+        return
+
+    from_url = f"https://birdeye.so/token/{from_token}?chain=solana"
+    to_url = f"https://birdeye.so/token/{to_token}?chain=solana"
+
+    text = (
+        f"🔄 <b>ROTATION DETECTED</b>\n"
+        f"\n"
+        f"<b>{html.escape(wallet_label)}</b> rotated:\n"
+        f"  <a href='{from_url}'>${html.escape(from_symbol)}</a>"
+        f" → "
+        f"<a href='{to_url}'>${html.escape(to_symbol)}</a>\n"
+        f"\n"
+        f"Sold: <b>${from_usd:,.0f}</b> | Bought: <b>${to_usd:,.0f}</b>"
+    )
+
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        logger.info(
+            "Rotation alert sent: %s %s → %s",
+            wallet_label,
+            from_symbol,
+            to_symbol,
+        )
+    except TelegramError as exc:
+        logger.warning("Telegram rotation alert failed: %s", exc)
+
+
 async def run_bot_command_loop() -> None:
     """
     Long-running coroutine that polls Telegram for new messages (getUpdates).
