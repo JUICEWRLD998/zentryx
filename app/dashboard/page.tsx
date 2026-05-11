@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { NavBar } from "@/components/navbar";
+import { Zap } from "lucide-react";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -14,6 +15,30 @@ interface Wallet {
   total_pnl: number;
   win_rate: number;
   trade_count: number;
+}
+
+interface OverlapWhale {
+  address: string;
+  label: string;
+  value_usd: number;
+  allocation_pct: number;
+}
+
+interface OverlapToken {
+  token_address: string;
+  symbol: string;
+  name: string;
+  logo_uri: string;
+  whale_count: number;
+  total_usd: number;
+  conviction: "EXTREME" | "HIGH" | "MODERATE";
+  whales: OverlapWhale[];
+}
+
+interface OverlapData {
+  tokens: OverlapToken[];
+  wallets_analyzed: number;
+  generated_at: number;
 }
 
 function fmt_usd(n: number): string {
@@ -53,6 +78,9 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [overlap, setOverlap] = useState<OverlapData | null>(null);
+  const [overlapLoading, setOverlapLoading] = useState(true);
+
   useEffect(() => {
     const load = async () => {
       try {
@@ -69,6 +97,14 @@ export default function Dashboard() {
     load();
     const interval = setInterval(load, 30_000);
     return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/wallets/overlap`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => setOverlap(d))
+      .catch(() => {})
+      .finally(() => setOverlapLoading(false));
   }, []);
 
   const totalPnl = wallets.reduce((s, w) => s + w.total_pnl, 0);
@@ -175,6 +211,111 @@ export default function Dashboard() {
                 ))}
               </tbody>
             </table>
+            </div>
+          )}
+        </div>
+
+        {/* ── Whale Conviction Zones ── */}
+        <div className="mt-8">
+          <div className="flex items-center gap-2 mb-4">
+            <Zap size={14} className="text-cyan" />
+            <h2 className="font-mono text-xs text-muted-foreground tracking-widest uppercase">
+              Whale Conviction Zones
+            </h2>
+            <span className="rounded-full border border-cyan/30 bg-cyan/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-cyan">
+              Token Overlap Matrix
+            </span>
+            {overlap && (
+              <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+                {overlap.wallets_analyzed} wallets analyzed
+              </span>
+            )}
+          </div>
+
+          {overlapLoading ? (
+            <div className="rounded-lg border border-border bg-card p-8 text-center font-mono text-xs text-muted-foreground animate-pulse">
+              COMPUTING OVERLAP...
+            </div>
+          ) : !overlap || overlap.tokens.length === 0 ? (
+            <div className="rounded-lg border border-border bg-card p-8 text-center font-mono text-xs text-muted-foreground">
+              No shared positions found yet — portfolio data updates every 10 min.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {overlap.tokens.slice(0, 12).map((token) => {
+                const isExtreme = token.conviction === "EXTREME";
+                const isHigh = token.conviction === "HIGH";
+                return (
+                  <Link
+                    key={token.token_address}
+                    href={`/token/${token.token_address}`}
+                    className={`group rounded-xl border p-4 transition-all hover:scale-[1.01] block ${
+                      isExtreme
+                        ? "border-yellow-400/40 bg-yellow-400/5 hover:border-yellow-400/60"
+                        : isHigh
+                        ? "border-cyan/30 bg-cyan/5 hover:border-cyan/50"
+                        : "border-border bg-card hover:border-border/80"
+                    }`}
+                  >
+                    {/* Token header */}
+                    <div className="flex items-start justify-between gap-2 mb-3">
+                      <div className="min-w-0">
+                        <p className="font-mono text-sm font-bold text-foreground group-hover:text-cyan transition-colors truncate">
+                          {token.symbol}
+                        </p>
+                        {token.name && (
+                          <p className="font-mono text-[10px] text-muted-foreground truncate">
+                            {token.name}
+                          </p>
+                        )}
+                      </div>
+                      <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest ${
+                        isExtreme
+                          ? "bg-yellow-400/20 text-yellow-400"
+                          : isHigh
+                          ? "bg-cyan/20 text-cyan"
+                          : "bg-muted text-muted-foreground"
+                      }`}>
+                        {isExtreme ? "⚡ EXTREME" : isHigh ? "HIGH" : "MODERATE"}
+                      </span>
+                    </div>
+
+                    {/* Stats row */}
+                    <div className="flex items-center gap-3 mb-3">
+                      <div>
+                        <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Whales</p>
+                        <p className={`font-mono text-lg font-bold ${isExtreme ? "text-yellow-400" : "text-cyan"}`}>
+                          {token.whale_count}
+                        </p>
+                      </div>
+                      <div className="h-8 w-px bg-border" />
+                      <div>
+                        <p className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Combined</p>
+                        <p className="font-mono text-sm font-semibold text-foreground">
+                          {token.total_usd >= 1_000_000
+                            ? `$${(token.total_usd / 1_000_000).toFixed(1)}M`
+                            : token.total_usd >= 1_000
+                            ? `$${(token.total_usd / 1_000).toFixed(0)}K`
+                            : `$${token.total_usd.toFixed(0)}`}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Whale labels */}
+                    <div className="flex flex-wrap gap-1">
+                      {token.whales.map((w) => (
+                        <span
+                          key={w.address}
+                          className="rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 font-mono text-[9px] text-muted-foreground"
+                          title={`${w.label}: $${w.value_usd.toLocaleString()}`}
+                        >
+                          {w.label}
+                        </span>
+                      ))}
+                    </div>
+                  </Link>
+                );
+              })}
             </div>
           )}
         </div>

@@ -220,5 +220,3 @@ async def run_polling_worker(on_event) -> None:
         logger.debug("Token polling round complete — %d tokens checked.", len(MONITORED_TOKENS))
 
         await asyncio.sleep(POLL_INTERVAL_SECS)
-
-        await asyncio.sleep(POLL_INTERVAL_SECS)

@@ -103,6 +103,138 @@ async def wallet_history(
     }
 
 
+# ── Token Overlap Matrix (Phase 3) ────────────────────────────────────────────
+# NOTE: This route MUST be declared before /wallets/{address} so FastAPI
+#       matches the literal "overlap" path segment rather than a wallet address.
+
+# In-process cache: (result, expires_at_unix)
+import time as _time
+_overlap_cache: tuple[dict, float] | None = None
+_OVERLAP_CACHE_TTL = 600  # 10 minutes
+
+
+@router.get("/wallets/overlap")
+async def wallet_token_overlap(min_value_usd: float = 500.0) -> dict:
+    """
+    Token Overlap Matrix — find tokens held by 2+ tracked whale wallets.
+
+    Fetches the current portfolio for every tracked wallet in parallel,
+    then cross-references to find shared positions.
+
+    Response:
+    {
+      "tokens": [
+        {
+          "token_address": str,
+          "symbol": str,
+          "name": str,
+          "logo_uri": str,
+          "whale_count": int,         # how many tracked whales hold this
+          "total_usd": float,         # combined USD value across all holders
+          "conviction": "EXTREME" | "HIGH" | "MODERATE",
+          "whales": [
+            { "address": str, "label": str, "value_usd": float, "allocation_pct": float }
+          ]
+        },
+        ...  (sorted by whale_count desc, then total_usd desc)
+      ],
+      "wallets_analyzed": int,
+      "generated_at": int
+    }
+
+    Cached 10 minutes.
+    """
+    global _overlap_cache
+
+    now = _time.time()
+    if _overlap_cache is not None:
+        result, expires_at = _overlap_cache
+        if now < expires_at:
+            return result
+
+    tracked = wd.tracked_wallets
+    if not tracked:
+        return {"tokens": [], "wallets_analyzed": 0, "generated_at": int(now)}
+
+    # Fetch all portfolios concurrently with per-wallet error isolation
+    async def _safe_portfolio(address: str, label: str) -> tuple[str, str, list[dict]]:
+        try:
+            raw = await birdeye.get_wallet_portfolio(address)
+            items = (raw.get("data") or {}).get("items") or []
+            return address, label, items
+        except Exception as exc:
+            logger.debug("Portfolio fetch failed for %s: %s", address[:8], exc)
+            return address, label, []
+
+    portfolios = await asyncio.gather(
+        *[_safe_portfolio(addr, tw.label) for addr, tw in tracked.items()]
+    )
+
+    # Build token → holders index
+    # token_map[token_address] = {"meta": {...}, "holders": [...]}
+    token_map: dict[str, dict] = {}
+
+    for wallet_addr, wallet_label, items in portfolios:
+        for item in items:
+            token_addr = item.get("address", "")
+            if not token_addr:
+                continue
+            value = float(item.get("valueUsd") or 0)
+            if value < min_value_usd:
+                continue
+
+            if token_addr not in token_map:
+                token_map[token_addr] = {
+                    "token_address": token_addr,
+                    "symbol": item.get("symbol") or token_addr[:8],
+                    "name": item.get("name") or "",
+                    "logo_uri": item.get("logoURI") or item.get("icon") or "",
+                    "holders": [],
+                    "total_usd": 0.0,
+                }
+
+            token_map[token_addr]["holders"].append({
+                "address": wallet_addr,
+                "label": wallet_label,
+                "value_usd": value,
+                "allocation_pct": float(item.get("uiAmount") or 0),
+            })
+            token_map[token_addr]["total_usd"] += value
+
+    # Filter to tokens held by 2+ wallets
+    shared_tokens = [v for v in token_map.values() if len(v["holders"]) >= 2]
+
+    # Assign conviction tier
+    def _conviction(n: int) -> str:
+        if n >= 4:
+            return "EXTREME"
+        if n >= 3:
+            return "HIGH"
+        return "MODERATE"
+
+    result_tokens = []
+    for t in sorted(shared_tokens, key=lambda x: (-len(x["holders"]), -x["total_usd"])):
+        n = len(t["holders"])
+        result_tokens.append({
+            "token_address": t["token_address"],
+            "symbol": t["symbol"],
+            "name": t["name"],
+            "logo_uri": t["logo_uri"],
+            "whale_count": n,
+            "total_usd": round(t["total_usd"], 2),
+            "conviction": _conviction(n),
+            "whales": sorted(t["holders"], key=lambda x: -x["value_usd"]),
+        })
+
+    result = {
+        "tokens": result_tokens,
+        "wallets_analyzed": len(portfolios),
+        "generated_at": int(now),
+    }
+    _overlap_cache = (result, now + _OVERLAP_CACHE_TTL)
+    return result
+
+
 @router.get("/wallets/{address}")
 async def wallet_detail(address: str) -> dict:
     """

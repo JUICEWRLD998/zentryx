@@ -293,16 +293,16 @@ async def discover_wallets() -> None:
     current_addresses = set(new_wallets.keys())
     if current_addresses != previous_addresses:
         try:
-            from services.solana_rpc_ws import request_resubscribe
+            from services.birdeye_ws import request_resubscribe
 
             request_resubscribe()
             logger.info(
-                "Tracked wallet set changed (%d -> %d) — requested Solana WS resubscribe.",
+                "Tracked wallet set changed (%d -> %d) — requested Birdeye WS resubscribe.",
                 len(previous_addresses),
                 len(current_addresses),
             )
         except Exception as exc:
-            logger.warning("Failed to request Solana WS resubscribe: %s", exc)
+            logger.warning("Failed to request Birdeye WS resubscribe: %s", exc)
 
     # ── Persist to PostgreSQL (upsert) ────────────────────────────────────
     if db.is_available():
