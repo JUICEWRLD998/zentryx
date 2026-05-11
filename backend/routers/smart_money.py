@@ -79,12 +79,23 @@ async def _build_heatmap(limit: int = 20) -> dict[str, Any]:
         logger.error("Failed to fetch smart money token list: %s", exc)
         raise HTTPException(status_code=502, detail="Upstream Birdeye error") from exc
 
-    items = (raw_list.get("data") or {}).get("items") or []
+    # API returns {"data": [...]} where data is a bare list of token objects.
+    # The token address field is "token" (not "address").
+    raw_data = raw_list.get("data") if isinstance(raw_list, dict) else raw_list
+    if isinstance(raw_data, dict):
+        # Older nested shape: {"data": {"items": [...]}}
+        items = raw_data.get("items") or []
+    elif isinstance(raw_data, list):
+        items = raw_data
+    else:
+        items = []
     if not items:
         return {"tokens": [], "generated_at": int(time.time())}
 
     # Step 2: fetch flows for every token concurrently (3 frames each)
-    addresses = [item.get("address", "") for item in items if item.get("address")]
+    # The address field is named "token" in the smart-money API response
+    addresses = [item.get("token") or item.get("address", "") for item in items]
+    addresses = [a for a in addresses if a]
 
     flow_results = await asyncio.gather(
         *[_fetch_flows_for_token(addr) for addr in addresses]
@@ -93,12 +104,13 @@ async def _build_heatmap(limit: int = 20) -> dict[str, Any]:
     # Step 3: merge
     tokens = []
     for item, flows in zip(items, flow_results):
+        addr = item.get("token") or item.get("address", "")
         tokens.append(
             {
-                "address": item.get("address", ""),
+                "address": addr,
                 "symbol": item.get("symbol", ""),
                 "name": item.get("name", ""),
-                "logo_uri": item.get("logoURI") or item.get("logo_uri") or "",
+                "logo_uri": item.get("logo_uri") or item.get("logoURI") or "",
                 "1h": flows["1h"],
                 "4h": flows["4h"],
                 "24h": flows["24h"],

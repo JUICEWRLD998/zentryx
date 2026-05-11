@@ -293,7 +293,7 @@ async def discover_wallets() -> None:
     current_addresses = set(new_wallets.keys())
     if current_addresses != previous_addresses:
         try:
-            from services.birdeye_ws import request_resubscribe
+            from services.solana_rpc_ws import request_resubscribe
 
             request_resubscribe()
             logger.info(

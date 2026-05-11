@@ -35,7 +35,7 @@ from routers.tokens import router as tokens_router
 from routers.smart_money import router as smart_money_router
 from routers.analytics import router as analytics_router
 from scheduler import scheduler
-from services.birdeye_ws import run_birdeye_ws
+from services.solana_rpc_ws import run_solana_rpc_ws
 from services.polling_worker import run_polling_worker
 from services.enrichment import process_trade_event
 from services.telegram import run_bot_command_loop, send_startup_message
@@ -64,8 +64,8 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     logger.info("Scheduler started. Running initial wallet discovery...")
     await discover_wallets()
-    _ws_task = asyncio.create_task(run_birdeye_ws(process_trade_event))
-    logger.info("Birdeye Premium WebSocket listener started.")
+    _ws_task = asyncio.create_task(run_solana_rpc_ws(process_trade_event))
+    logger.info("Solana RPC WebSocket listener started.")
     _polling_task = asyncio.create_task(run_polling_worker(process_trade_event))
     logger.info("REST polling worker started (Birdeye token tx polling).")
     _bot_task = asyncio.create_task(run_bot_command_loop())
