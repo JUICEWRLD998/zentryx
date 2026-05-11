@@ -32,6 +32,7 @@ from routers.wallets import router as wallets_router
 from routers.ws import router as ws_router
 from routers.trades import router as trades_router
 from routers.tokens import router as tokens_router
+from routers.smart_money import router as smart_money_router
 from scheduler import scheduler
 from services.solana_rpc_ws import run_solana_rpc_ws
 from services.polling_worker import run_polling_worker
@@ -112,6 +113,7 @@ app.include_router(wallets_router)
 app.include_router(ws_router)
 app.include_router(trades_router)
 app.include_router(tokens_router)
+app.include_router(smart_money_router)
 
 
 @app.get("/health")

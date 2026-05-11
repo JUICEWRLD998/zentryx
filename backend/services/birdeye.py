@@ -308,3 +308,18 @@ async def get_token_trending(
             "limit": limit,
         },
     )
+
+
+async def get_smart_money_inflow_outflow(
+    token_address: str,
+    time_frame: str = "24H",
+) -> dict[str, Any]:
+    """Endpoint 25 — /smart-money/v1/token/inflow-outflow
+
+    Returns net smart money flow for a single token over the given time window.
+    time_frame: "1H" | "4H" | "24H"
+    """
+    return await _get(
+        "/smart-money/v1/token/inflow-outflow",
+        params={"address": token_address, "type": time_frame},
+    )

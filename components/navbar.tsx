@@ -20,6 +20,7 @@ type NavPage =
   | "movers"
   | "trending"
   | "new-listings"
+  | "smart-money"
   | undefined;
 
 const NAV_LINKS: { label: string; href: string; page: NavPage }[] = [
@@ -28,6 +29,7 @@ const NAV_LINKS: { label: string; href: string; page: NavPage }[] = [
   { label: "MOVERS",      href: "/movers",    page: "movers" },
   { label: "TRENDING",    href: "/trending",  page: "trending" },
   { label: "NEW LISTINGS", href: "/new-listings", page: "new-listings" },
+  { label: "SMART MONEY", href: "/smart-money", page: "smart-money" },
 ];
 
 interface NavBarProps {

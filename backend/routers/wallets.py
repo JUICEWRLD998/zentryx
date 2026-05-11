@@ -192,3 +192,114 @@ async def wallet_portfolio(address: str) -> list[dict]:
         }
         for item in items
     ]
+
+
+# ── Balance Change (endpoint 6) ───────────────────────────────────────────────
+
+@router.get("/wallets/{address}/balance-change")
+async def wallet_balance_change(address: str) -> dict:
+    """
+    24H and 7D balance delta for a wallet.
+    Uses Birdeye endpoint 6 — /wallet/v2/balance-change.
+    """
+    from fastapi import HTTPException
+    try:
+        raw = await birdeye.get_wallet_balance_change(address)
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to fetch balance change: {exc}")
+
+    data = raw.get("data") or {}
+
+    return {
+        "address": address,
+        "change_24h_usd": data.get("change24h") or data.get("changeUsd24h") or data.get("netChange24hUsd") or 0,
+        "change_7d_usd":  data.get("change7d")  or data.get("changeUsd7d")  or data.get("netChange7dUsd")  or 0,
+        "change_24h_pct": data.get("change24hPercent") or data.get("pctChange24h") or 0,
+        "change_7d_pct":  data.get("change7dPercent")  or data.get("pctChange7d")  or 0,
+        "current_usd":    data.get("totalUsd") or data.get("netWorth") or 0,
+    }
+
+
+# ── Net Worth Details (endpoint 4) ────────────────────────────────────────────
+
+@router.get("/wallets/{address}/net-worth-details")
+async def wallet_net_worth_details(address: str) -> dict:
+    """
+    Full asset class breakdown — not just a total net worth number.
+    Uses Birdeye endpoint 4 — /wallet/v2/net-worth-details.
+    """
+    from fastapi import HTTPException
+    try:
+        raw = await birdeye.get_wallet_net_worth_details(address)
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to fetch net worth details: {exc}")
+
+    data = raw.get("data") or {}
+    items: list[dict] = data.get("items") or data.get("assets") or []
+
+    total_usd = sum((i.get("valueUsd") or i.get("usdValue") or 0) for i in items)
+
+    categories: dict[str, float] = {}
+    breakdown: list[dict] = []
+    for item in items:
+        symbol = item.get("symbol") or item.get("name") or "Unknown"
+        value = float(item.get("valueUsd") or item.get("usdValue") or 0)
+        category = item.get("type") or item.get("assetType") or "token"
+        categories[category] = categories.get(category, 0) + value
+        breakdown.append({
+            "symbol": symbol,
+            "category": category,
+            "value_usd": value,
+            "allocation_pct": round(value / total_usd * 100, 1) if total_usd > 0 else 0,
+            "logo_uri": item.get("logoURI") or item.get("icon") or "",
+        })
+
+    breakdown.sort(key=lambda x: x["value_usd"], reverse=True)
+
+    return {
+        "address": address,
+        "total_usd": float(data.get("totalUsd") or data.get("total_usd") or total_usd),
+        "categories": [
+            {"category": k, "value_usd": round(v, 2)}
+            for k, v in sorted(categories.items(), key=lambda x: x[1], reverse=True)
+        ],
+        "breakdown": breakdown[:20],
+    }
+
+
+# ── Activity Timeline (endpoint 7) ────────────────────────────────────────────
+
+@router.get("/wallets/{address}/activity")
+async def wallet_activity(
+    address: str,
+    limit: int = 20,
+) -> list[dict]:
+    """
+    Last N transactions for a wallet — type, amount, token, timestamp.
+    Uses Birdeye endpoint 7 — /v1/wallet/tx_list.
+    """
+    from fastapi import HTTPException
+    try:
+        raw = await birdeye.get_wallet_tx_list(address, limit=min(limit, 50))
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to fetch wallet activity: {exc}")
+
+    items: list[dict] = (raw.get("data") or {}).get("items") or (raw.get("data") or [])
+    if isinstance(items, dict):
+        items = items.get("items") or []
+
+    result: list[dict] = []
+    for tx in items:
+        result.append({
+            "signature": tx.get("txHash") or tx.get("signature") or "",
+            "type": tx.get("type") or tx.get("txType") or "unknown",
+            "side": tx.get("side") or ("BUY" if (tx.get("type") or "").upper() == "SWAP" else ""),
+            "token_address": tx.get("tokenAddress") or tx.get("address") or "",
+            "token_symbol": tx.get("tokenSymbol") or tx.get("symbol") or "",
+            "amount": tx.get("uiAmount") or tx.get("amount") or 0,
+            "value_usd": tx.get("valueUsd") or tx.get("usdValue") or 0,
+            "timestamp": tx.get("blockUnixTime") or tx.get("timestamp") or 0,
+            "status": tx.get("status") or "confirmed",
+        })
+
+    return result

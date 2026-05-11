@@ -636,3 +636,207 @@ async def get_signal_profitability() -> dict:
             "message": "No data yet — DB unavailable or no signals recorded.",
         }
     return cached
+
+
+# ── Top Traders (endpoint 8) ──────────────────────────────────────────────────
+
+@router.get("/tokens/{address}/top-traders")
+async def get_top_traders_for_token(address: str, limit: int = 10) -> list[dict]:
+    """
+    Top traders by PnL for a specific token.
+    Uses Birdeye endpoint 8 — /defi/v2/tokens/top_traders.
+    Each entry links back to the wallet's Zentryx profile if they are tracked.
+    """
+    try:
+        raw = await birdeye.get_top_traders(address, limit=min(limit, 20))
+    except Exception as exc:
+        logger.warning("top-traders fetch failed for %s: %s", address[:8], exc)
+        raise HTTPException(502, "Failed to fetch top traders from Birdeye")
+
+    items: list[dict] = (raw.get("data") or {}).get("items") or []
+    if not items:
+        return []
+
+    # Cross-reference tracked wallets for richer labels
+    from services.wallet_discovery import get_tracked_wallets
+    tracked_map = {w.address: w.label for w in get_tracked_wallets()}
+
+    result: list[dict] = []
+    for item in items:
+        addr = item.get("address") or item.get("owner") or ""
+        label = tracked_map.get(addr)
+        result.append({
+            "address": addr,
+            "label": label or (addr[:8] + "..." if addr else "unknown"),
+            "is_tracked": label is not None,
+            "pnl_usd": item.get("pnl") or item.get("realizedPnl") or 0,
+            "volume_usd": item.get("volume") or item.get("volumeUsd") or 0,
+            "trade_count": item.get("tradeCount") or item.get("txCount") or 0,
+            "win_rate": item.get("winRate") or 0,
+        })
+    return result
+
+
+# ── Holder Distribution (endpoints 11 + 12) ───────────────────────────────────
+
+@router.get("/tokens/{address}/holders")
+async def get_holder_data(address: str) -> dict:
+    """
+    Holder count and distribution breakdown.
+    Combines endpoint 11 (holder count + top list) and endpoint 12 (distribution).
+    """
+    try:
+        holders_raw, dist_raw = await asyncio.gather(
+            birdeye.get_token_holders(address),
+            birdeye.get_holder_distribution(address),
+        )
+    except Exception as exc:
+        logger.warning("holders fetch failed for %s: %s", address[:8], exc)
+        raise HTTPException(502, "Failed to fetch holder data from Birdeye")
+
+    holders_data = (holders_raw.get("data") or {})
+    dist_data = (dist_raw.get("data") or {})
+
+    total_holders = holders_data.get("total") or holders_data.get("count") or 0
+    top_items: list[dict] = holders_data.get("items") or holders_data.get("holders") or []
+
+    # Distibution buckets from endpoint 12
+    distribution = dist_data.get("items") or dist_data.get("buckets") or []
+
+    # Build simplified top-10 list
+    top10 = [
+        {
+            "address": h.get("address") or h.get("owner") or "",
+            "amount": h.get("uiAmount") or h.get("amount") or 0,
+            "pct": round((h.get("pct") or h.get("percentage") or 0) * 100, 2),
+        }
+        for h in top_items[:10]
+    ]
+
+    top10_pct = sum(h["pct"] for h in top10)
+
+    return {
+        "total_holders": total_holders,
+        "top10_pct": round(top10_pct, 2),
+        "top10": top10,
+        "distribution": distribution,
+        "concentration_risk": "HIGH" if top10_pct > 80 else "MODERATE" if top10_pct > 60 else "LOW",
+    }
+
+
+# ── Trade Data / Buy-Sell Flow (endpoint 15) ──────────────────────────────────
+
+@router.get("/tokens/{address}/trade-data")
+async def get_trade_data(address: str) -> dict:
+    """
+    Buy/sell count and volume breakdown for a token.
+    Uses Birdeye endpoint 15 — /defi/v3/token/trade-data/single.
+    """
+    try:
+        raw = await birdeye.get_token_trade_data(address)
+    except Exception as exc:
+        logger.warning("trade-data fetch failed for %s: %s", address[:8], exc)
+        raise HTTPException(502, "Failed to fetch trade data from Birdeye")
+
+    data = raw.get("data") or {}
+
+    buy_count = data.get("buy") or data.get("buyCount") or data.get("buy24h") or 0
+    sell_count = data.get("sell") or data.get("sellCount") or data.get("sell24h") or 0
+    buy_vol = data.get("buyVolume") or data.get("buyVolumeUsd") or data.get("vBuy24hUSD") or 0
+    sell_vol = data.get("sellVolume") or data.get("sellVolumeUsd") or data.get("vSell24hUSD") or 0
+    total_trades = buy_count + sell_count
+    buy_ratio = round(buy_count / total_trades, 3) if total_trades > 0 else 0.5
+
+    return {
+        "buy_count": int(buy_count),
+        "sell_count": int(sell_count),
+        "total_trades": int(total_trades),
+        "buy_volume_usd": float(buy_vol),
+        "sell_volume_usd": float(sell_vol),
+        "buy_ratio": buy_ratio,
+        "pressure": "BUY" if buy_ratio >= 0.55 else "SELL" if buy_ratio <= 0.45 else "NEUTRAL",
+    }
+
+
+# ── Exit Liquidity Estimator (endpoint 17) ────────────────────────────────────
+
+@router.get("/tokens/{address}/exit-liquidity")
+async def get_exit_liquidity_data(address: str) -> dict:
+    """
+    Exit liquidity depth — slippage estimates for different exit sizes.
+    Uses Birdeye endpoint 17 — /defi/v3/token/exit-liquidity.
+    """
+    try:
+        raw = await birdeye.get_exit_liquidity(address)
+    except Exception as exc:
+        logger.warning("exit-liquidity fetch failed for %s: %s", address[:8], exc)
+        raise HTTPException(502, "Failed to fetch exit liquidity from Birdeye")
+
+    data = raw.get("data") or {}
+
+    # Birdeye returns slippage tiers; structure varies — normalize defensively
+    tiers: list[dict] = data.get("items") or data.get("tiers") or []
+    total_liquidity = data.get("totalLiquidity") or data.get("liquidity") or 0
+    depth_1pct = data.get("depth1Pct") or data.get("depth_1pct") or 0
+    depth_2pct = data.get("depth2Pct") or data.get("depth_2pct") or 0
+
+    # Build standardized slippage table for $1K / $5K / $10K exit sizes
+    def _slippage_for_usd(exit_usd: float) -> float | None:
+        if not total_liquidity:
+            return None
+        pct_of_liq = exit_usd / total_liquidity
+        # Simplified linear model: 1% of liquidity ≈ 1% slippage (conservative)
+        return round(min(pct_of_liq * 100, 99.9), 2)
+
+    slippage_estimates = [
+        {"exit_usd": 1_000,  "slippage_pct": _slippage_for_usd(1_000)},
+        {"exit_usd": 5_000,  "slippage_pct": _slippage_for_usd(5_000)},
+        {"exit_usd": 10_000, "slippage_pct": _slippage_for_usd(10_000)},
+    ]
+
+    return {
+        "total_liquidity_usd": float(total_liquidity),
+        "depth_1pct_usd": float(depth_1pct),
+        "depth_2pct_usd": float(depth_2pct),
+        "slippage_estimates": slippage_estimates,
+        "tiers": tiers,
+        "rating": (
+            "DEEP" if total_liquidity >= 1_000_000 else
+            "ADEQUATE" if total_liquidity >= 100_000 else
+            "THIN" if total_liquidity >= 10_000 else
+            "CRITICAL"
+        ),
+    }
+
+
+# ── Multi-timeframe Price Stats (endpoint 10) ─────────────────────────────────
+
+@router.get("/tokens/{address}/price-stats")
+async def get_price_stats_data(address: str) -> dict:
+    """
+    Multi-timeframe price stats: 1H, 4H, 24H side-by-side.
+    Uses Birdeye endpoint 10 — /defi/v3/price-stats/single.
+    """
+    try:
+        raw = await birdeye.get_price_stats(address)
+    except Exception as exc:
+        logger.warning("price-stats fetch failed for %s: %s", address[:8], exc)
+        raise HTTPException(502, "Failed to fetch price stats from Birdeye")
+
+    data = raw.get("data") or {}
+
+    def _tf(key_prefix: str) -> dict:
+        """Extract stats for a given timeframe prefix."""
+        return {
+            "price_change_pct": data.get(f"{key_prefix}ChangePercent") or data.get(f"price{key_prefix}ChangePercent") or 0,
+            "high": data.get(f"{key_prefix}High") or data.get(f"high{key_prefix}") or 0,
+            "low": data.get(f"{key_prefix}Low") or data.get(f"low{key_prefix}") or 0,
+            "volume_usd": data.get(f"{key_prefix}Volume") or data.get(f"v{key_prefix}USD") or 0,
+        }
+
+    return {
+        "current_price": data.get("price") or data.get("value") or 0,
+        "1h":  _tf("1h"),
+        "4h":  _tf("4h"),
+        "24h": _tf("24h"),
+    }
