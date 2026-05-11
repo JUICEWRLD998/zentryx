@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { NavBar } from "@/components/navbar";
-import { RefreshCw, Zap, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { RefreshCw, Zap, TrendingUp, TrendingDown, Minus, Star } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -13,7 +13,13 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 // ──────────────────────────────────────────────────────────────
 
 type Signal = "BUY" | "SELL" | "NEUTRAL";
-type FilterValue = "ALL" | Signal;
+type FilterValue = "ALL" | Signal | "WHALE_OVERLAP";
+
+interface WhaleTrade {
+  wallet_label: string;
+  side: "BUY" | "SELL" | "UNKNOWN";
+  usd_value: number;
+}
 
 interface SmartMoneyToken {
   address: string;
@@ -24,6 +30,7 @@ interface SmartMoneyToken {
   buy_usd: number;
   sell_usd: number;
   net_usd: number;
+  tracked_whale_trades: WhaleTrade[];
 }
 
 interface HeatmapData {
@@ -75,13 +82,15 @@ function SignalBadge({ signal }: { signal: Signal }) {
 
 function TokenCard({ token }: { token: SmartMoneyToken }) {
   const hasVolume = token.buy_usd > 0 || token.sell_usd > 0;
+  const hasWhales = token.tracked_whale_trades.length > 0;
 
-  const borderCls =
-    token.signal === "BUY"
-      ? "border-buy/20 hover:border-buy/50"
-      : token.signal === "SELL"
-      ? "border-sell/20 hover:border-sell/50"
-      : "border-border/40 hover:border-border/70";
+  const borderCls = hasWhales
+    ? "border-yellow-400/40 hover:border-yellow-400/70"
+    : token.signal === "BUY"
+    ? "border-buy/20 hover:border-buy/50"
+    : token.signal === "SELL"
+    ? "border-sell/20 hover:border-sell/50"
+    : "border-border/40 hover:border-border/70";
 
   const hoverBg =
     token.signal === "BUY"
@@ -103,7 +112,8 @@ function TokenCard({ token }: { token: SmartMoneyToken }) {
             alt={token.symbol}
             width={32}
             height={32}
-            className="rounded-full shrink-0 ring-1 ring-border"
+            unoptimized
+            className="h-8 w-8 rounded-full shrink-0 ring-1 ring-border object-cover"
             onError={(e) => {
               (e.target as HTMLImageElement).style.display = "none";
             }}
@@ -121,6 +131,10 @@ function TokenCard({ token }: { token: SmartMoneyToken }) {
             </p>
           )}
         </div>
+        {/* Whale overlap indicator */}
+        {hasWhales && (
+          <Star size={12} className="shrink-0 text-yellow-400 fill-yellow-400/60" />
+        )}
       </div>
 
       {/* Signal badge */}
@@ -139,6 +153,43 @@ function TokenCard({ token }: { token: SmartMoneyToken }) {
           </div>
         </div>
       )}
+
+      {/* Our tracked whale activity on this token */}
+      {hasWhales && (
+        <div className="rounded-lg border border-yellow-400/20 bg-yellow-400/5 px-2.5 py-2">
+          <div className="flex items-center gap-1 mb-1.5">
+            <Star size={9} className="text-yellow-400 fill-yellow-400/60" />
+            <span className="font-mono text-[9px] font-bold uppercase tracking-wider text-yellow-400">
+              Our Whales
+            </span>
+          </div>
+          <div className="flex flex-col gap-1">
+            {token.tracked_whale_trades.map((t, i) => (
+              <div key={i} className="flex items-center justify-between gap-1">
+                <span className="font-mono text-[9px] text-muted-foreground truncate">
+                  {t.wallet_label}
+                </span>
+                <div className="flex items-center gap-1 shrink-0">
+                  <span
+                    className={`rounded px-1 py-0.5 font-mono text-[8px] font-bold uppercase ${
+                      t.side === "BUY"
+                        ? "bg-buy/15 text-buy"
+                        : t.side === "SELL"
+                        ? "bg-sell/15 text-sell"
+                        : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {t.side}
+                  </span>
+                  <span className="font-mono text-[9px] text-foreground">
+                    {fmtUsd(t.usd_value)}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </Link>
   );
 }
@@ -151,7 +202,7 @@ function FilterPill({
 }: {
   label: string;
   active: boolean;
-  color: "cyan" | "buy" | "sell" | "neutral";
+  color: "cyan" | "buy" | "sell" | "neutral" | "whale";
   onClick: () => void;
 }) {
   const activeCls =
@@ -161,6 +212,8 @@ function FilterPill({
       ? "bg-sell/15 border-sell/40 text-sell"
       : color === "neutral"
       ? "bg-muted/30 border-border/50 text-muted-foreground"
+      : color === "whale"
+      ? "bg-yellow-400/15 border-yellow-400/40 text-yellow-400"
       : "bg-cyan/10 border-cyan/40 text-cyan";
 
   return (
@@ -209,9 +262,14 @@ export default function SmartMoneyPage() {
   const buyCount = tokens.filter((t) => t.signal === "BUY").length;
   const sellCount = tokens.filter((t) => t.signal === "SELL").length;
   const neutralCount = tokens.filter((t) => t.signal === "NEUTRAL").length;
+  const whaleOverlapCount = tokens.filter((t) => t.tracked_whale_trades.length > 0).length;
 
   const filtered =
-    filter === "ALL" ? tokens : tokens.filter((t) => t.signal === filter);
+    filter === "ALL"
+      ? tokens
+      : filter === "WHALE_OVERLAP"
+      ? tokens.filter((t) => t.tracked_whale_trades.length > 0)
+      : tokens.filter((t) => t.signal === filter);
 
   const generatedAt = data?.generated_at
     ? new Date(data.generated_at * 1000).toLocaleTimeString(undefined, {
@@ -235,7 +293,7 @@ export default function SmartMoneyPage() {
               </h1>
             </div>
             <p className="font-mono text-xs text-muted-foreground">
-              Tokens smart money wallets are accumulating · Green = buying · Red = selling · Click any token for analysis
+              Birdeye smart money signal · ★ = our tracked whales also in this token · Green = buying · Red = selling
             </p>
           </div>
 
@@ -283,6 +341,14 @@ export default function SmartMoneyPage() {
               color="neutral"
               onClick={() => setFilter("NEUTRAL")}
             />
+            {whaleOverlapCount > 0 && (
+              <FilterPill
+                label={`★ Whale Overlap (${whaleOverlapCount})`}
+                active={filter === "WHALE_OVERLAP"}
+                color="whale"
+                onClick={() => setFilter("WHALE_OVERLAP")}
+              />
+            )}
           </div>
         )}
 
@@ -317,7 +383,7 @@ export default function SmartMoneyPage() {
         )}
 
         <p className="mt-6 font-mono text-[9px] text-muted-foreground/60 text-center">
-          Data powered by Birdeye Smart Money · Cached 15 min · Click any token for full analysis
+          Birdeye Smart Money (global) · ★ Our Tracked Whales (24h overlap) · Cached 15 min
         </p>
       </main>
     </div>

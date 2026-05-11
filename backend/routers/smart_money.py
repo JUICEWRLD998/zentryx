@@ -30,10 +30,14 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from sqlalchemy import func, select
 
+import db
+from db import get_session, trade_event_table
 from services import birdeye
 
 logger = logging.getLogger(__name__)
@@ -119,6 +123,46 @@ async def _build_heatmap(limit: int = 20) -> dict[str, Any]:
                 "net_usd": round(net_usd, 2),
             }
         )
+
+    # ── Correlate with our tracked whale trades (last 24 h) ─────────────────
+    token_addrs = [t["address"] for t in tokens]
+    whale_trades: dict[str, list[dict[str, Any]]] = {addr: [] for addr in token_addrs}
+
+    if token_addrs and db.is_available():
+        try:
+            since = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+            async with get_session() as session:
+                result = await session.execute(
+                    select(
+                        trade_event_table.c.token_address,
+                        trade_event_table.c.wallet_label,
+                        trade_event_table.c.side,
+                        func.sum(trade_event_table.c.usd_value).label("usd_value"),
+                    )
+                    .where(
+                        trade_event_table.c.token_address.in_(token_addrs),
+                        trade_event_table.c.timestamp >= since,
+                        trade_event_table.c.wallet_label.isnot(None),
+                    )
+                    .group_by(
+                        trade_event_table.c.token_address,
+                        trade_event_table.c.wallet_label,
+                        trade_event_table.c.side,
+                    )
+                )
+                for row in result.fetchall():
+                    whale_trades[row.token_address].append(
+                        {
+                            "wallet_label": row.wallet_label,
+                            "side": row.side,
+                            "usd_value": round(float(row.usd_value), 2),
+                        }
+                    )
+        except Exception as exc:
+            logger.warning("Whale trade correlation failed: %s", exc)
+
+    for token in tokens:
+        token["tracked_whale_trades"] = whale_trades.get(token["address"], [])
 
     return {"tokens": tokens, "generated_at": int(time.time())}
 

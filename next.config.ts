@@ -11,6 +11,8 @@ const nextConfig: NextConfig = {
       // Birdeye direct CDN
       { protocol: "https", hostname: "*.birdeye.so" },
       { protocol: "https", hostname: "birdeye.so" },
+      // Social media avatars used as token logos
+      { protocol: "https", hostname: "pbs.twimg.com" },
       // Generic token logo CDNs
       { protocol: "https", hostname: "raw.githubusercontent.com" },
       { protocol: "https", hostname: "arweave.net" },
