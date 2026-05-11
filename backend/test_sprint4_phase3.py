@@ -479,25 +479,26 @@ class TestPollingWorkerFix:
             "The double-sleep bug may have been reintroduced."
         )
 
-    def test_wallet_discovery_resubscribes_birdeye_ws_not_solana_ws(self):
+    def test_wallet_discovery_resubscribes_solana_rpc_ws_not_birdeye_ws(self):
         """
-        wallet_discovery.py must call birdeye_ws.request_resubscribe,
-        NOT solana_rpc_ws.request_resubscribe.
+        wallet_discovery.py must call solana_rpc_ws.request_resubscribe,
+        NOT birdeye_ws.request_resubscribe (we switched to free Solana RPC WS).
         """
         import inspect
         from services import wallet_discovery
         source = inspect.getsource(wallet_discovery.discover_wallets)
-        assert "birdeye_ws" in source, "wallet_discovery should import from birdeye_ws"
-        assert "solana_rpc_ws" not in source, (
-            "wallet_discovery should NOT reference solana_rpc_ws anymore"
+        assert "solana_rpc_ws" in source, "wallet_discovery should import from solana_rpc_ws"
+        assert "birdeye_ws" not in source, (
+            "wallet_discovery should NOT reference birdeye_ws anymore (switched to Solana RPC WS)"
         )
 
-    def test_main_uses_birdeye_ws_not_solana_ws(self):
+    def test_main_uses_solana_rpc_ws_not_birdeye_ws(self):
         """
-        main.py must import run_birdeye_ws, NOT run_solana_rpc_ws.
+        main.py must import run_solana_rpc_ws, NOT run_birdeye_ws.
+        We switched from Birdeye WS (premium, 403 errors) to free Solana RPC WS.
         """
         import pathlib
         main_src = pathlib.Path(__file__).parent / "main.py"
         content = main_src.read_text()
-        assert "run_birdeye_ws" in content, "main.py must start run_birdeye_ws"
-        assert "run_solana_rpc_ws" not in content, "main.py must NOT start run_solana_rpc_ws"
+        assert "run_solana_rpc_ws" in content, "main.py must start run_solana_rpc_ws"
+        assert "run_birdeye_ws" not in content, "main.py must NOT start run_birdeye_ws (switched to Solana RPC WS)"

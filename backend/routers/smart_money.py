@@ -1,10 +1,12 @@
 """
-Smart money inflow/outflow heatmap router.
+Smart money signal router.
 
 GET /api/smart-money/heatmap
-  — Fetches the top smart money tokens, then queries inflow/outflow for each
-    across three time windows (1H, 4H, 24H).
-  — Results are cached in-process for 15 minutes to avoid hammering the API.
+  — Fetches the top smart money tokens from Birdeye's free smart-money token
+    list endpoint and computes a BUY / SELL / NEUTRAL signal from the buy/sell
+    volume fields returned by that endpoint.
+  — The premium inflow/outflow endpoint is NOT used (returns 404 on free tier).
+  — Results are cached in-process for 15 minutes.
 
 Response schema:
   {
@@ -14,9 +16,10 @@ Response schema:
         "symbol": str,
         "name": str,
         "logo_uri": str,
-        "1h":  { "inflow": float, "outflow": float, "net": float },
-        "4h":  { "inflow": float, "outflow": float, "net": float },
-        "24h": { "inflow": float, "outflow": float, "net": float }
+        "signal": "BUY" | "SELL" | "NEUTRAL",
+        "buy_usd": float,
+        "sell_usd": float,
+        "net_usd": float
       },
       ...
     ],
@@ -25,7 +28,6 @@ Response schema:
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from typing import Any
@@ -43,77 +45,78 @@ _cache: tuple[dict[str, Any], float] | None = None
 _CACHE_TTL = 900  # 15 minutes
 
 
-def _parse_flow(raw: dict[str, Any]) -> dict[str, float]:
-    """Extract inflow, outflow, net from a single Birdeye inflow-outflow response."""
-    data = raw.get("data") or {}
-    inflow = float(data.get("buyAmount") or data.get("inflow") or 0)
-    outflow = float(data.get("sellAmount") or data.get("outflow") or 0)
-    net = inflow - outflow
-    return {"inflow": inflow, "outflow": outflow, "net": net}
+def _compute_signal(item: dict[str, Any]) -> tuple[str, float, float, float]:
+    """
+    Derive BUY / SELL / NEUTRAL signal from a smart-money token list item.
 
+    Birdeye's /smart-money/v1/token/list items may include buy/sell volume
+    fields under several naming conventions — try them all.
 
-async def _fetch_flows_for_token(
-    address: str,
-) -> dict[str, dict[str, float]]:
-    """Fetch 1H / 4H / 24H flows for a single token. Returns zeros on error."""
-    frames = ["1H", "4H", "24H"]
+    If no buy/sell data is present the token is still on the smart-money list,
+    which itself indicates smart-money accumulation, so we default to BUY.
+    """
+    buy = float(
+        item.get("buy") or item.get("buyVolume") or item.get("buyAmountUsd") or 0
+    )
+    sell = float(
+        item.get("sell") or item.get("sellVolume") or item.get("sellAmountUsd") or 0
+    )
+    # Prefer an explicit net field; fall back to computing it.
+    net_raw = item.get("net") or item.get("netBuy") or item.get("net_buy")
+    net = float(net_raw) if net_raw is not None else (buy - sell)
 
-    async def _safe_fetch(frame: str) -> dict[str, float]:
-        try:
-            raw = await birdeye.get_smart_money_inflow_outflow(address, time_frame=frame)
-            return _parse_flow(raw)
-        except Exception as exc:
-            logger.debug("Flow fetch failed for %s@%s: %s", address, frame, exc)
-            return {"inflow": 0.0, "outflow": 0.0, "net": 0.0}
+    if buy == 0 and sell == 0:
+        # No volume data — token is on the smart-money list → accumulating.
+        return "BUY", 0.0, 0.0, 0.0
 
-    results = await asyncio.gather(*[_safe_fetch(f) for f in frames])
-    return {"1h": results[0], "4h": results[1], "24h": results[2]}
+    if net > 0:
+        return "BUY", buy, sell, net
+    if net < 0:
+        return "SELL", buy, sell, net
+    return "NEUTRAL", buy, sell, net
 
 
 async def _build_heatmap(limit: int = 20) -> dict[str, Any]:
-    """Core builder — fetch token list then flows in parallel."""
-    # Step 1: get top smart money tokens
+    """Fetch the smart money token list and derive per-token signals."""
     try:
         raw_list = await birdeye.get_smart_money_tokens(limit=limit)
     except Exception as exc:
         logger.error("Failed to fetch smart money token list: %s", exc)
         raise HTTPException(status_code=502, detail="Upstream Birdeye error") from exc
 
-    # API returns {"data": [...]} where data is a bare list of token objects.
-    # The token address field is "token" (not "address").
+    # API may return {"data": [...]} or {"data": {"items": [...]}}
     raw_data = raw_list.get("data") if isinstance(raw_list, dict) else raw_list
     if isinstance(raw_data, dict):
-        # Older nested shape: {"data": {"items": [...]}}
         items = raw_data.get("items") or []
     elif isinstance(raw_data, list):
         items = raw_data
     else:
         items = []
+
     if not items:
         return {"tokens": [], "generated_at": int(time.time())}
 
-    # Step 2: fetch flows for every token concurrently (3 frames each)
-    # The address field is named "token" in the smart-money API response
-    addresses = [item.get("token") or item.get("address", "") for item in items]
-    addresses = [a for a in addresses if a]
-
-    flow_results = await asyncio.gather(
-        *[_fetch_flows_for_token(addr) for addr in addresses]
-    )
-
-    # Step 3: merge
-    tokens = []
-    for item, flows in zip(items, flow_results):
+    tokens: list[dict[str, Any]] = []
+    for item in items:
         addr = item.get("token") or item.get("address", "")
+        if not addr:
+            continue
+        signal, buy_usd, sell_usd, net_usd = _compute_signal(item)
         tokens.append(
             {
                 "address": addr,
                 "symbol": item.get("symbol", ""),
                 "name": item.get("name", ""),
-                "logo_uri": item.get("logo_uri") or item.get("logoURI") or "",
-                "1h": flows["1h"],
-                "4h": flows["4h"],
-                "24h": flows["24h"],
+                "logo_uri": (
+                    item.get("logo_uri")
+                    or item.get("logoURI")
+                    or item.get("logoUri")
+                    or ""
+                ),
+                "signal": signal,
+                "buy_usd": round(buy_usd, 2),
+                "sell_usd": round(sell_usd, 2),
+                "net_usd": round(net_usd, 2),
             }
         )
 

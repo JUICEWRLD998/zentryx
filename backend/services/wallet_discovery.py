@@ -297,12 +297,12 @@ async def discover_wallets() -> None:
 
             request_resubscribe()
             logger.info(
-                "Tracked wallet set changed (%d -> %d) — requested Birdeye WS resubscribe.",
+                "Tracked wallet set changed (%d -> %d) — requested Solana RPC WS resubscribe.",
                 len(previous_addresses),
                 len(current_addresses),
             )
         except Exception as exc:
-            logger.warning("Failed to request Birdeye WS resubscribe: %s", exc)
+            logger.warning("Failed to request Solana RPC WS resubscribe: %s", exc)
 
     # ── Persist to PostgreSQL (upsert) ────────────────────────────────────
     if db.is_available():

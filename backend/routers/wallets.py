@@ -243,9 +243,10 @@ async def wallet_detail(address: str) -> dict:
     """
     wallet = wd.tracked_wallets.get(address)
 
-    pnl_raw, net_worth_raw = await asyncio.gather(
+    pnl_raw, net_worth_raw, portfolio_raw = await asyncio.gather(
         birdeye.get_wallet_pnl_summary(address),
         birdeye.get_wallet_net_worth(address),
+        birdeye.get_wallet_portfolio(address),
         return_exceptions=True,
     )
 
@@ -268,9 +269,24 @@ async def wallet_detail(address: str) -> dict:
     net_worth_data: dict = {}
     if isinstance(net_worth_raw, dict):
         data = net_worth_raw.get("data") or {}
-        net_worth_data = {
-            "total_usd": data.get("total_usd") or data.get("totalUsd"),
-        }
+        total = (
+            data.get("totalUsd")
+            or data.get("total_usd")
+            or data.get("netWorthUsd")
+            or data.get("netWorth")
+        )
+        if total:
+            net_worth_data = {"total_usd": float(total)}
+
+    # Fallback: compute net worth by summing the live portfolio items.
+    # get_wallet_portfolio → /v1/wallet/token_list works on free tier.
+    if not net_worth_data.get("total_usd") and isinstance(portfolio_raw, dict):
+        port_items: list[dict] = (
+            (portfolio_raw.get("data") or {}).get("items") or []
+        )
+        portfolio_total = sum(float(i.get("valueUsd") or 0) for i in port_items)
+        if portfolio_total > 0:
+            net_worth_data = {"total_usd": portfolio_total}
 
     return {
         "address": address,
