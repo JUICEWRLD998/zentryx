@@ -569,6 +569,7 @@ async def _handle_start(bot: Bot, update: Update) -> None:
         "/analyze [token] — AI deep-dive analysis via Groq\n"
         "/track [token] [tp%] [sl%] — open a paper trade\n"
         "/my-trades — view your paper trade positions\n"
+        "/alert [token] [price] [above|below] — set a price alert\n"
         "/trending — top 5 trending Solana tokens\n"
         "/newlisting — 5 newest token launches\n"
         "/holdings [token] — which whales hold a token\n"

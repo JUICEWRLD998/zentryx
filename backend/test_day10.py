@@ -174,7 +174,7 @@ class TestSendDailyBriefing:
         assert "⚠️" in text          # exits block
         assert "🤖" in text          # AI block
         assert "📈" in text          # best signal block
-        assert "zentryx.app/live" in text
+        assert "zentryx.app/live" not in text
 
     @pytest.mark.asyncio
     async def test_groq_fails_no_ai_section(self):
