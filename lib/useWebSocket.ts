@@ -12,6 +12,7 @@ export type TradeEvent = {
   usd_value: number | null;
   tx_hash: string | null;
   block_time: number | null;
+  is_whale?: boolean;
   mini_report: {
     token_address: string;
     security_score: number | null;

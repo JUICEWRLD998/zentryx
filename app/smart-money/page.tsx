@@ -83,6 +83,7 @@ function SignalBadge({ signal }: { signal: Signal }) {
 function TokenCard({ token }: { token: SmartMoneyToken }) {
   const hasVolume = token.buy_usd > 0 || token.sell_usd > 0;
   const hasWhales = token.tracked_whale_trades.length > 0;
+  const netFlow = token.buy_usd - token.sell_usd;
 
   const borderCls = hasWhales
     ? "border-yellow-400/40 hover:border-yellow-400/70"
@@ -126,52 +127,45 @@ function TokenCard({ token }: { token: SmartMoneyToken }) {
             {token.symbol || token.address.slice(0, 6)}
           </p>
           {token.name && (
-            <p className="font-mono text-[9px] text-muted-foreground truncate">
+            <p className="font-mono text-[10px] text-muted-foreground truncate">
               {token.name}
             </p>
           )}
         </div>
-        {/* Whale overlap indicator */}
         {hasWhales && (
           <Star size={12} className="shrink-0 text-yellow-400 fill-yellow-400/60" />
         )}
       </div>
 
-      {/* Signal badge */}
-      <SignalBadge signal={token.signal} />
+      {/* Signal badge + net flow on same row */}
+      <div className="flex items-center justify-between gap-2">
+        <SignalBadge signal={token.signal} />
+        {hasVolume && (
+          <span
+            className={`font-mono text-xs font-semibold shrink-0 ${
+              netFlow >= 0 ? "text-buy" : "text-sell"
+            }`}
+          >
+            {netFlow >= 0 ? "+" : ""}{fmtUsd(netFlow)}
+          </span>
+        )}
+      </div>
 
-      {/* Buy / Sell volume breakdown (only when data is available) */}
-      {hasVolume && (
-        <div className="grid grid-cols-2 gap-1.5 font-mono text-[9px]">
-          <div className="rounded bg-buy/5 border border-buy/10 px-1.5 py-1 text-center">
-            <div className="text-buy/60 mb-0.5">BUY</div>
-            <div className="text-foreground font-semibold">{fmtUsd(token.buy_usd)}</div>
-          </div>
-          <div className="rounded bg-sell/5 border border-sell/10 px-1.5 py-1 text-center">
-            <div className="text-sell/60 mb-0.5">SELL</div>
-            <div className="text-foreground font-semibold">{fmtUsd(token.sell_usd)}</div>
-          </div>
-        </div>
-      )}
-
-      {/* Our tracked whale activity on this token */}
+      {/* Our tracked whale activity */}
       {hasWhales && (
-        <div className="rounded-lg border border-yellow-400/20 bg-yellow-400/5 px-2.5 py-2">
-          <div className="flex items-center gap-1 mb-1.5">
-            <Star size={9} className="text-yellow-400 fill-yellow-400/60" />
-            <span className="font-mono text-[9px] font-bold uppercase tracking-wider text-yellow-400">
-              Our Whales
-            </span>
-          </div>
+        <div className="rounded-lg border border-yellow-400/20 bg-yellow-400/5 px-3 py-2">
+          <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-yellow-400 mb-1.5">
+            ★ Our Whales
+          </p>
           <div className="flex flex-col gap-1">
             {token.tracked_whale_trades.map((t, i) => (
-              <div key={i} className="flex items-center justify-between gap-1">
-                <span className="font-mono text-[9px] text-muted-foreground truncate">
+              <div key={i} className="flex items-center justify-between gap-2">
+                <span className="font-mono text-[10px] text-muted-foreground truncate">
                   {t.wallet_label}
                 </span>
                 <div className="flex items-center gap-1 shrink-0">
                   <span
-                    className={`rounded px-1 py-0.5 font-mono text-[8px] font-bold uppercase ${
+                    className={`rounded px-1.5 py-0.5 font-mono text-[9px] font-bold ${
                       t.side === "BUY"
                         ? "bg-buy/15 text-buy"
                         : t.side === "SELL"
@@ -181,7 +175,7 @@ function TokenCard({ token }: { token: SmartMoneyToken }) {
                   >
                     {t.side}
                   </span>
-                  <span className="font-mono text-[9px] text-foreground">
+                  <span className="font-mono text-[10px] text-foreground">
                     {fmtUsd(t.usd_value)}
                   </span>
                 </div>
@@ -375,15 +369,15 @@ export default function SmartMoneyPage() {
             <p className="font-mono text-sm text-muted-foreground">No tokens found.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {filtered.map((token) => (
               <TokenCard key={token.address} token={token} />
             ))}
           </div>
         )}
 
-        <p className="mt-6 font-mono text-[9px] text-muted-foreground/60 text-center">
-          Birdeye Smart Money (global) · ★ Our Tracked Whales (24h overlap) · Cached 15 min
+        <p className="mt-8 font-mono text-[10px] text-muted-foreground/50 text-center">
+          Birdeye Smart Money (global) · ★ = our tracked whales also active in this token · Cached 15 min
         </p>
       </main>
     </div>

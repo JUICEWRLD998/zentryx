@@ -134,6 +134,11 @@ function TradeCard({
           {event.mini_report?.smart_money_flag && (
             <span className="text-xs text-cyan">◆ Smart $</span>
           )}
+          {event.is_whale && (
+            <span className="rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wider bg-yellow-400/15 text-yellow-400">
+              ★ WHALE
+            </span>
+          )}
           {isRotation && (
             <span className="rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wider bg-yellow-400/15 text-yellow-400">
               ROTATION
@@ -435,10 +440,10 @@ export default function LivePage() {
         <div className="flex flex-wrap items-start justify-between gap-3 mb-6">
           <div>
             <h1 className="font-mono text-lg font-semibold tracking-wider text-foreground">
-              LIVE FEED
+              LIVE MARKET FEED
             </h1>
             <p className="font-mono text-xs text-muted-foreground mt-0.5">
-              Live tracked-wallet trades via Solana RPC · click a card for details
+              All large Solana trades · $10K+ · 20 trending tokens · ★ = tracked whale
             </p>
           </div>
           <div className="flex items-center gap-4">
@@ -459,7 +464,7 @@ export default function LivePage() {
           {events.length === 0 ? (
             <div className="rounded-lg border border-border bg-card p-10 text-center font-mono text-sm text-muted-foreground">
               {status === "connected"
-                ? "Waiting for $1K+ trades from tracked wallets..."
+              ? "Waiting for $10K+ trades across trending tokens..."
                 : "Connecting to live feed..."}
             </div>
           ) : (

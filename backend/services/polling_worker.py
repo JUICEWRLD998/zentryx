@@ -19,7 +19,7 @@ from services import birdeye
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECS = 60          # how often to poll each token (1 minute)
-MIN_VALUE_USD = 1_000            # minimum trade size to emit ($1,000)
+MIN_VALUE_USD = 10_000           # minimum trade size to emit ($10,000)
 MAX_SEEN: int = 5_000            # cap on dedup cache
 TOKEN_POLL_DELAY = 2.0           # seconds between consecutive token polls (sequential, not parallel)
 TRENDING_REFRESH_SECS = 900      # refresh trending token list every 15 minutes
@@ -58,14 +58,21 @@ async def refresh_monitored_tokens() -> None:
             logger.warning("Trending tokens returned empty list — keeping current token list.")
             return
 
-        fresh = [
-            {
-                "address": item.get("address") or item.get("mint") or "",
-                "symbol": item.get("symbol") or item.get("name") or "UNKNOWN",
-            }
-            for item in items
-            if item.get("address") or item.get("mint")
-        ]
+        seen_syms: set[str] = set()
+        fresh: list[dict] = []
+        for item in items:
+            addr = item.get("address") or item.get("mint") or ""
+            if not addr:
+                continue
+            sym = (
+                (item.get("symbol") or "").strip()
+                or (item.get("name") or "").strip()
+                or addr[:6].upper()
+            )
+            if sym in seen_syms:
+                continue
+            seen_syms.add(sym)
+            fresh.append({"address": addr, "symbol": sym})
 
         if fresh:
             MONITORED_TOKENS = fresh
@@ -102,7 +109,7 @@ async def _poll_token(token: dict, tracked_wallet_addrs: set[str], on_event) -> 
     cutoff = now - 600  # only process txs from the last 10 minutes
 
     total = len(txs)
-    skipped_dup = skipped_stale = skipped_usd = skipped_untracked = emitted = 0
+    skipped_dup = skipped_stale = skipped_usd = emitted = 0
 
     # Log raw keys of first tx once per token to diagnose field name mismatches
     if txs:
@@ -143,11 +150,7 @@ async def _poll_token(token: dict, tracked_wallet_addrs: set[str], on_event) -> 
             skipped_usd += 1
             continue
 
-        # Only emit trades from tracked wallets
         owner = tx.get("owner") or tx.get("wallet") or ""
-        if not owner or owner not in tracked_wallet_addrs:
-            skipped_untracked += 1
-            continue
 
         _seen_tx_ids.add(tx_hash)
         _prune_seen()
@@ -169,6 +172,7 @@ async def _poll_token(token: dict, tracked_wallet_addrs: set[str], on_event) -> 
                 "side": side,
                 "volumeUSD": value_usd,
                 "blockUnixTime": ts,
+                "is_whale": owner in tracked_wallet_addrs,
             },
         }
         emitted += 1
@@ -178,8 +182,8 @@ async def _poll_token(token: dict, tracked_wallet_addrs: set[str], on_event) -> 
             logger.debug("Enrichment task error: %s", exc)
 
     logger.info(
-        "[%s] polled %d txs → emitted=%d dup=%d stale=%d below_usd=%d untracked=%d",
-        symbol, total, emitted, skipped_dup, skipped_stale, skipped_usd, skipped_untracked,
+        "[%s] polled %d txs → emitted=%d dup=%d stale=%d below_usd=%d",
+        symbol, total, emitted, skipped_dup, skipped_stale, skipped_usd,
     )
 
 

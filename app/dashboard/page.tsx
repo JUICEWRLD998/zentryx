@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { NavBar } from "@/components/navbar";
-import { Zap, TrendingUp, ArrowRight } from "lucide-react";
+import { Zap, ArrowRight } from "lucide-react";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -39,23 +39,6 @@ interface OverlapData {
   tokens: OverlapToken[];
   wallets_analyzed: number;
   generated_at: number;
-}
-
-interface SignalPerformer {
-  address: string;
-  symbol: string;
-  entry_usd: number;
-  current_price: number;
-  return_pct: number;
-}
-
-interface SignalStats {
-  computed_at: string | null;
-  total_signals: number;
-  profitable: number;
-  win_rate: number;
-  avg_return_pct: number;
-  top_performers: SignalPerformer[];
 }
 
 interface Rotation {
@@ -114,9 +97,6 @@ export default function Dashboard() {
   const [overlap, setOverlap] = useState<OverlapData | null>(null);
   const [overlapLoading, setOverlapLoading] = useState(true);
 
-  const [signals, setSignals] = useState<SignalStats | null>(null);
-  const [signalsLoading, setSignalsLoading] = useState(true);
-
   const [rotations, setRotations] = useState<RotationData | null>(null);
   const [rotationsLoading, setRotationsLoading] = useState(true);
 
@@ -144,14 +124,6 @@ export default function Dashboard() {
       .then((d) => setOverlap(d))
       .catch(() => {})
       .finally(() => setOverlapLoading(false));
-  }, []);
-
-  useEffect(() => {
-    fetch(`${API_BASE}/api/signals/stats`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((d) => setSignals(d))
-      .catch(() => {})
-      .finally(() => setSignalsLoading(false));
   }, []);
 
   useEffect(() => {
@@ -271,86 +243,6 @@ export default function Dashboard() {
                 ))}
               </tbody>
             </table>
-            </div>
-          )}
-        </div>
-
-        {/* ── Signal Performance ── */}
-        <div className="mt-8">
-          <div className="flex items-center gap-2 mb-4">
-            <TrendingUp size={14} className="text-buy" />
-            <h2 className="font-mono text-xs text-muted-foreground tracking-widest uppercase">
-              Signal Performance
-            </h2>
-            <span className="rounded-full border border-buy/30 bg-buy/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-buy">
-              Live Outcomes
-            </span>
-          </div>
-
-          {signalsLoading ? (
-            <div className="rounded-lg border border-border bg-card p-6 text-center font-mono text-xs text-muted-foreground animate-pulse">
-              COMPUTING SIGNAL STATS...
-            </div>
-          ) : !signals || signals.total_signals === 0 ? (
-            <div className="rounded-lg border border-border bg-card p-6 text-center font-mono text-xs text-muted-foreground">
-              Signal stats computed every 2h — check back soon.
-            </div>
-          ) : (
-            <div className="rounded-lg border border-border bg-card overflow-hidden">
-              {/* Aggregate row */}
-              <div className="grid grid-cols-3 divide-x divide-border border-b border-border">
-                {[
-                  {
-                    label: "WIN RATE",
-                    value: `${signals.win_rate.toFixed(1)}%`,
-                    color: signals.win_rate >= 55 ? "text-buy" : signals.win_rate >= 40 ? "text-yellow-400" : "text-sell",
-                  },
-                  {
-                    label: "SIGNALS TRACKED",
-                    value: `${signals.profitable}/${signals.total_signals}`,
-                    color: "text-foreground",
-                  },
-                  {
-                    label: "AVG RETURN",
-                    value: `${signals.avg_return_pct >= 0 ? "+" : ""}${signals.avg_return_pct.toFixed(2)}%`,
-                    color: signals.avg_return_pct >= 0 ? "text-buy" : "text-sell",
-                  },
-                ].map(({ label, value, color }) => (
-                  <div key={label} className="px-5 py-4">
-                    <p className="font-mono text-[10px] text-muted-foreground tracking-widest mb-1">{label}</p>
-                    <p className={`font-mono text-xl font-bold ${color}`}>{value}</p>
-                  </div>
-                ))}
-              </div>
-              {/* Top performers */}
-              {signals.top_performers.length > 0 && (
-                <div className="px-5 py-3">
-                  <p className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground mb-2">
-                    TOP PERFORMERS
-                  </p>
-                  <div className="flex flex-col gap-1.5">
-                    {signals.top_performers.slice(0, 3).map((p) => (
-                      <Link
-                        key={p.address}
-                        href={`/token/${p.address}`}
-                        className="flex items-center justify-between rounded border border-border/50 bg-background/40 px-3 py-2 hover:border-buy/30 hover:bg-buy/5 transition-colors"
-                      >
-                        <span className="font-mono text-xs font-semibold text-foreground">
-                          ${p.symbol}
-                        </span>
-                        <span className={`font-mono text-xs font-bold ${p.return_pct >= 0 ? "text-buy" : "text-sell"}`}>
-                          {p.return_pct >= 0 ? "+" : ""}{p.return_pct.toFixed(2)}%
-                        </span>
-                      </Link>
-                    ))}
-                  </div>
-                  {signals.computed_at && (
-                    <p className="font-mono text-[9px] text-muted-foreground/50 mt-2">
-                      Updated {new Date(signals.computed_at).toLocaleTimeString()}
-                    </p>
-                  )}
-                </div>
-              )}
             </div>
           )}
         </div>
