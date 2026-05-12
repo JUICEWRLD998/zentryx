@@ -24,6 +24,7 @@
 .DS_Store
 *.pem
 SPRINT3.md
+SPRINT4.md
 
 # debug
 npm-debug.log*
