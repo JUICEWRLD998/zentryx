@@ -150,11 +150,23 @@ async def get_wallet_tx_list(
 # 2. Token intelligence endpoints
 # ---------------------------------------------------------------------------
 
-async def get_top_traders(token_address: str, limit: int = 20) -> dict[str, Any]:
+async def get_top_traders(
+    token_address: str,
+    limit: int = 20,
+    time_frame: str = "1W",
+    sort_by: str = "pnl",
+    sort_type: str = "desc",
+) -> dict[str, Any]:
     """Endpoint 8 — /defi/v2/tokens/top_traders"""
     return await _get(
         "/defi/v2/tokens/top_traders",
-        params={"address": token_address, "limit": limit},
+        params={
+            "address": token_address,
+            "limit": limit,
+            "time_frame": time_frame,
+            "sort_by": sort_by,
+            "sort_type": sort_type,
+        },
     )
 
 

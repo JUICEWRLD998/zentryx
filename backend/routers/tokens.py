@@ -648,7 +648,7 @@ async def get_top_traders_for_token(address: str, limit: int = 10) -> list[dict]
     Each entry links back to the wallet's Zentryx profile if they are tracked.
     """
     try:
-        raw = await birdeye.get_top_traders(address, limit=min(limit, 20))
+        raw = await birdeye.get_top_traders(address, limit=min(limit, 20), time_frame="1W")
     except Exception as exc:
         logger.warning("top-traders fetch failed for %s: %s", address[:8], exc)
         raise HTTPException(502, "Failed to fetch top traders from Birdeye")
@@ -656,6 +656,10 @@ async def get_top_traders_for_token(address: str, limit: int = 10) -> list[dict]
     items: list[dict] = (raw.get("data") or {}).get("items") or []
     if not items:
         return []
+
+    # Log raw field keys once for debugging field-name mismatches
+    if items:
+        logger.debug("top-traders item[0] keys: %s", list(items[0].keys()))
 
     # Cross-reference tracked wallets for richer labels
     from services.wallet_discovery import get_tracked_wallets
@@ -665,15 +669,59 @@ async def get_top_traders_for_token(address: str, limit: int = 10) -> list[dict]
     for item in items:
         addr = item.get("address") or item.get("owner") or ""
         label = tracked_map.get(addr)
+        # Birdeye v2 top_traders response uses: tradeCount, numTrades, txns, or txCount
+        trade_count = (
+            item.get("tradeCount")
+            or item.get("numTrades")
+            or item.get("txns")
+            or item.get("txCount")
+            or item.get("trade")
+            or 0
+        )
+        # winRate is a 0–1 float; fall back to winrate (lowercase) variant
+        win_rate = (
+            item.get("winRate")
+            or item.get("winrate")
+            or item.get("win_rate")
+            or 0.0
+        )
         result.append({
             "address": addr,
             "label": label or (addr[:8] + "..." if addr else "unknown"),
             "is_tracked": label is not None,
             "pnl_usd": item.get("pnl") or item.get("realizedPnl") or 0,
             "volume_usd": item.get("volume") or item.get("volumeUsd") or 0,
-            "trade_count": item.get("tradeCount") or item.get("txCount") or 0,
-            "win_rate": item.get("winRate") or 0,
+            "trade_count": int(trade_count),
+            "win_rate": float(win_rate),
         })
+
+    # Supplement trade_count from our own DB when Birdeye returns 0
+    import db as _db
+    if _db.is_available():
+        try:
+            from sqlalchemy import func
+            from db import trade_event_table, get_session
+            addresses = [r["address"] for r in result if r["address"]]
+            if addresses:
+                async with get_session() as session:
+                    rows = await session.execute(
+                        select(
+                            trade_event_table.c.wallet_id,
+                            func.count().label("cnt"),
+                        )
+                        .where(
+                            trade_event_table.c.token_address == address,
+                            trade_event_table.c.wallet_id.in_(addresses),
+                        )
+                        .group_by(trade_event_table.c.wallet_id)
+                    )
+                    db_counts = {row.wallet_id: row.cnt for row in rows.fetchall()}
+                for r in result:
+                    if r["trade_count"] == 0 and r["address"] in db_counts:
+                        r["trade_count"] = db_counts[r["address"]]
+        except Exception as exc:
+            logger.debug("DB trade_count supplement failed: %s", exc)
+
     return result
 
 

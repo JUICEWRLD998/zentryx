@@ -377,6 +377,7 @@ async def send_daily_briefing() -> None:
     """
     Build and send the daily Zentryx market briefing to the Telegram channel.
     Called by the scheduler every day at 09:00 UTC.
+    Includes: 24h whale activity from DB, Birdeye smart money + trending + gainers.
     AI section is included if Groq is available; omitted gracefully if not.
     """
     bot = _get_bot()
@@ -388,6 +389,7 @@ async def send_daily_briefing() -> None:
     try:
         from datetime import datetime, timezone
         from services.gemini import analyse_daily_briefing
+        from services import birdeye as _birdeye
 
         data = await _build_briefing_data()
 
@@ -399,11 +401,42 @@ async def send_daily_briefing() -> None:
             )
             return
 
+        # ── Birdeye enrichment ───────────────────────────────────────────────
+        birdeye_smart_money: list[dict] = []
+        birdeye_trending: list[dict] = []
+        birdeye_gainer: dict | None = None
+
+        try:
+            sm_raw, trend_raw, gl_raw = await asyncio.gather(
+                _birdeye.get_smart_money_tokens(limit=5),
+                _birdeye.get_token_trending(sort_by="rank", sort_type="asc", offset=0, limit=3),
+                _birdeye.get_gainers_losers(time_frame="1D", sort_by="PnL", sort_type="desc", limit=3),
+                return_exceptions=True,
+            )
+
+            if not isinstance(sm_raw, Exception):
+                birdeye_smart_money = ((sm_raw.get("data") or {}).get("items") or [])[:3]
+
+            if not isinstance(trend_raw, Exception):
+                birdeye_trending = ((trend_raw.get("data") or {}).get("tokens") or [])[:3]
+
+            if not isinstance(gl_raw, Exception):
+                gl_items = (gl_raw.get("data") or {}).get("items") or []
+                gainers = [i for i in gl_items if (i.get("pnl") or i.get("PnL") or 0) > 0]
+                if gainers:
+                    g = gainers[0]
+                    birdeye_gainer = {
+                        "symbol": g.get("symbol") or g.get("address", "")[:8],
+                        "address": g.get("address") or "",
+                        "pnl": g.get("pnl") or g.get("PnL") or 0,
+                    }
+        except Exception as exc:
+            logger.debug("Birdeye enrichment for briefing failed: %s", exc)
+
         ai_insight = await analyse_daily_briefing(data)
 
         # Header
         now_utc = datetime.now(tz=timezone.utc)
-        # Cross-platform day formatting (no leading zero)
         day_num = now_utc.day
         month_name = now_utc.strftime("%B")
         weekday = now_utc.strftime("%A")
@@ -419,7 +452,7 @@ async def send_daily_briefing() -> None:
             f"• ${data['total_volume_usd']:,.0f} total notional volume",
         ]
 
-        # Accumulation block
+        # Accumulation block (from DB)
         if data["accumulation_tokens"]:
             lines += ["", "🔥 <b>Smart Money Accumulation</b>"]
             for i, t in enumerate(data["accumulation_tokens"], 1):
@@ -427,11 +460,45 @@ async def send_daily_briefing() -> None:
                     f"{i}. ${t['symbol']} — {t['wallet_count']} wallet(s) entered (${t['total_usd']:,.0f} combined)"
                 )
 
-        # Exit block — only if there are sell events
+        # Exit block — only if there are sell events (from DB)
         if data["exit_tokens"] and data["sell_count"] > 0:
             lines += ["", "⚠️ <b>Smart Money Exits</b>"]
             for t in data["exit_tokens"]:
                 lines.append(f"• ${t['symbol']} — {t['wallet_count']} wallet(s) reduced positions")
+
+        # Birdeye — smart money radar
+        if birdeye_smart_money:
+            lines += ["", "🧠 <b>Birdeye Smart Money Radar</b>"]
+            for t in birdeye_smart_money:
+                sym = html.escape(str(t.get("symbol") or t.get("address", "")[:8]))
+                pct = t.get("priceChange24hPercent") or t.get("price24hChangePercent") or 0
+                pct_str = f"{pct:+.2f}%" if pct else "—"
+                pct_emoji = "🟢" if pct > 0 else ("🔴" if pct < 0 else "⬜")
+                addr = t.get("address") or ""
+                url = f"https://birdeye.so/token/{addr}?chain=solana"
+                lines.append(f"• <a href='{url}'>${sym}</a> {pct_emoji} {pct_str}")
+
+        # Birdeye — trending
+        if birdeye_trending:
+            lines += ["", "🔥 <b>Trending Right Now</b>"]
+            for t in birdeye_trending:
+                sym = html.escape(str(t.get("symbol") or t.get("address", "")[:8]))
+                pct = t.get("priceChange24hPercent") or t.get("price24hChangePercent") or 0
+                pct_str = f"{pct:+.2f}%" if pct else "—"
+                pct_emoji = "🟢" if pct > 0 else ("🔴" if pct < 0 else "⬜")
+                rank = t.get("rank") or ""
+                rank_str = f"#{rank} " if rank else ""
+                addr = t.get("address") or ""
+                url = f"https://birdeye.so/token/{addr}?chain=solana"
+                lines.append(f"• {rank_str}<a href='{url}'>${sym}</a> {pct_emoji} {pct_str}")
+
+        # Birdeye — top gainer wallet
+        if birdeye_gainer:
+            lines += ["", "🏆 <b>Top Gainer Wallet (1D)</b>"]
+            sym = html.escape(birdeye_gainer["symbol"])
+            pnl = birdeye_gainer["pnl"]
+            pnl_str = f"${pnl:,.0f}" if pnl >= 1 else f"${pnl:.4f}"
+            lines.append(f"• ${sym}  +{pnl_str} realized")
 
         # AI insight — omitted if Groq unavailable
         if ai_insight:
@@ -443,7 +510,7 @@ async def send_daily_briefing() -> None:
             ret = s["return_pct"]
             ret_str = f"{ret:+.1f}%"
             badge = "✅" if ret > 0 else "❌"
-            lines += ["", f"📈 <b>Best Signal Yesterday</b>", f"${s['symbol']} {ret_str} since whale entry {badge}"]
+            lines += ["", "<b>📈 Best Signal Yesterday</b>", f"${s['symbol']} {ret_str} since whale entry {badge}"]
 
         # Footer
         lines += ["", "View live → zentryx.app/live"]
@@ -455,7 +522,10 @@ async def send_daily_briefing() -> None:
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
-        logger.info("Daily briefing sent: %d trades, AI=%s", data["total_trades"], ai_insight is not None)
+        logger.info(
+            "Daily briefing sent: %d trades, AI=%s, smart_money=%d, trending=%d",
+            data["total_trades"], ai_insight is not None, len(birdeye_smart_money), len(birdeye_trending),
+        )
 
     except Exception as exc:
         logger.error("Daily briefing failed: %s", exc, exc_info=True)
@@ -1641,7 +1711,7 @@ async def _handle_holdings(bot: Bot, update: Update) -> None:
     )
 
 
-async def _dispatch(bot: Bot, update: Update) -> None:
+async def _handle_close_trade(bot: Bot, update: Update) -> None:
     """/close-trade <id> — manually close an open paper trade at current price."""
     chat_id = update.message.chat.id
     telegram_user_id = update.message.from_user.id
