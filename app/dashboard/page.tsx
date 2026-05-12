@@ -179,7 +179,7 @@ export default function Dashboard() {
             <h2 className="font-mono text-xs text-muted-foreground tracking-widest">
               WHALE LEADERBOARD
             </h2>
-            <span className="font-mono text-xs text-muted-foreground">7D · UPDATED LIVE</span>
+            <span className="font-mono text-xs text-muted-foreground">7D PERFORMANCE</span>
           </div>
 
           {loading ? (

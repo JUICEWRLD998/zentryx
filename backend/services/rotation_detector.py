@@ -46,6 +46,9 @@ async def detect_rotations(limit: int = 10) -> list[dict[str, Any]]:
 
     try:
         async with get_session() as session:
+            from services.wallet_discovery import tracked_wallets
+            tracked_labels = {tw.label for tw in tracked_wallets.values()}
+
             result = await session.execute(
                 select(
                     trade_event_table.c.wallet_label,
@@ -56,7 +59,10 @@ async def detect_rotations(limit: int = 10) -> list[dict[str, Any]]:
                     trade_event_table.c.usd_value,
                     trade_event_table.c.timestamp,
                 )
-                .where(trade_event_table.c.timestamp >= cutoff)
+                .where(
+                    trade_event_table.c.timestamp >= cutoff,
+                    trade_event_table.c.wallet_label.in_(list(tracked_labels)) if tracked_labels else False,
+                )
                 .order_by(trade_event_table.c.timestamp.asc())
             )
             rows = result.fetchall()

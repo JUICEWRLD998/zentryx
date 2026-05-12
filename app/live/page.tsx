@@ -371,14 +371,79 @@ function TokenModal({
   );
 }
 
+// ── DB row → TradeEvent adapter ────────────────────────────────────────────
+
+interface DbTrade {
+  id: string;
+  signature: string;
+  wallet_address: string | null;
+  wallet_label: string | null;
+  token_address: string;
+  token_symbol: string | null;
+  side: string;
+  usd_value: number | null;
+  timestamp: string;
+  security_score: number | null;
+  is_honeypot: boolean | null;
+  smart_money_flag: boolean | null;
+  momentum_24h: number | null;
+  holder_count: number | null;
+  buy_sell_ratio: number | null;
+  liquidity_usd: number | null;
+}
+
+function dbTradeToEvent(row: DbTrade): TradeEvent {
+  return {
+    type: "WALLET_TXS",
+    wallet_address: row.wallet_address,
+    wallet_label: row.wallet_label ?? "Unknown",
+    token_address: row.token_address,
+    symbol: row.token_symbol,
+    side: (row.side === "BUY" ? "BUY" : "SELL") as "BUY" | "SELL",
+    usd_value: row.usd_value,
+    tx_hash: row.signature,
+    block_time: null,
+    is_whale: false,
+    mini_report: {
+      token_address: row.token_address,
+      security_score: row.security_score,
+      is_honeypot: row.is_honeypot,
+      smart_money_flag: row.smart_money_flag ?? false,
+      momentum_24h: row.momentum_24h,
+      holder_count: row.holder_count,
+      buy_sell_ratio: row.buy_sell_ratio,
+      total_liquidity_usd: row.liquidity_usd,
+      symbol: row.token_symbol,
+      price: null,
+      market_cap: null,
+      volume_24h: null,
+    },
+  };
+}
+
 // ── Page ───────────────────────────────────────────────────────────────────
 
 export default function LivePage() {
   const { events, status, clearEvents } = useWebSocket(WS_URL);
+  const [preloaded, setPreloaded] = useState<TradeEvent[]>([]);
+  const [preloadDone, setPreloadDone] = useState(false);
   const [selected, setSelected] = useState<TradeEvent | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [outcomeMap, setOutcomeMap] = useState<OutcomeMap>({});
   const [rotationSet, setRotationSet] = useState<RotationSet>(new Set());
+
+  // Pre-populate feed from DB on mount — shows instantly before WS fires
+  useEffect(() => {
+    fetch(`${API_BASE}/api/trades?limit=50&hours=24`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        if (d?.trades?.length) {
+          setPreloaded((d.trades as DbTrade[]).map(dbTradeToEvent));
+        }
+      })
+      .catch(() => {})
+      .finally(() => setPreloadDone(true));
+  }, []);
 
   // Fetch signal outcomes — refreshes every 10 min
   useEffect(() => {
@@ -443,44 +508,53 @@ export default function LivePage() {
               LIVE MARKET FEED
             </h1>
             <p className="font-mono text-xs text-muted-foreground mt-0.5">
-              All large Solana trades · $10K+ · 20 trending tokens · ★ = tracked whale
+              Whale trades streamed live · click any card for full report
             </p>
           </div>
           <div className="flex items-center gap-4">
             <StatusDot status={status} />
-            {events.length > 0 && (
+            {(events.length > 0 || preloaded.length > 0) && (
               <button
-                onClick={clearEvents}
+                onClick={() => { clearEvents(); setPreloaded([]); }}
                 className="font-mono text-xs text-muted-foreground hover:text-foreground transition-colors"
               >
-                CLEAR ({events.length})
+                CLEAR ({events.length > 0 ? events.length : preloaded.length})
               </button>
             )}
           </div>
         </div>
 
-        {/* Feed */}
-        <div className="flex flex-col gap-3">
-          {events.length === 0 ? (
-            <div className="rounded-lg border border-border bg-card p-10 text-center font-mono text-sm text-muted-foreground">
-              {status === "connected"
-              ? "Waiting for $10K+ trades across trending tokens..."
-                : "Connecting to live feed..."}
+        {/* Feed — live events take priority; fall back to preloaded history */}
+        {(() => {
+          const displayEvents = events.length > 0 ? events : preloaded;
+          return (
+            <div className="flex flex-col gap-3">
+              {displayEvents.length === 0 ? (
+                <div className="rounded-lg border border-border bg-card p-10 text-center font-mono text-sm text-muted-foreground">
+                  {!preloadDone
+                    ? "Loading recent trades..."
+                    : status === "connected"
+                    ? "Waiting for $10K+ trades across trending tokens..."
+                    : "Connecting to live feed..."}
+                </div>
+              ) : (
+                <>
+                  <AnimatePresence initial={false} mode="popLayout">
+                    {displayEvents.map((e, i) => (
+                      <TradeCard
+                        key={`${e.tx_hash ?? e.token_address}-${i}`}
+                        event={e}
+                        outcomeMap={outcomeMap}
+                        rotationSet={rotationSet}
+                        onClick={handleCardClick}
+                      />
+                    ))}
+                  </AnimatePresence>
+                </>
+              )}
             </div>
-          ) : (
-            <AnimatePresence initial={false} mode="popLayout">
-              {events.map((e, i) => (
-                <TradeCard
-                  key={`${e.tx_hash ?? e.token_address}-${i}`}
-                  event={e}
-                  outcomeMap={outcomeMap}
-                  rotationSet={rotationSet}
-                  onClick={handleCardClick}
-                />
-              ))}
-            </AnimatePresence>
-          )}
-        </div>
+          );
+        })()}
       </main>
 
       <TokenModal

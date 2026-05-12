@@ -85,6 +85,16 @@ function TokenCard({ token }: { token: SmartMoneyToken }) {
   const hasWhales = token.tracked_whale_trades.length > 0;
   const netFlow = token.buy_usd - token.sell_usd;
 
+  // Confidence score (0–100) — combines signal strength + whale overlap
+  const totalVolume = token.buy_usd + token.sell_usd;
+  const signalStrength = totalVolume > 0
+    ? Math.min(100, Math.round(Math.abs(netFlow) / totalVolume * 100))
+    : 0;
+  const whaleBoost = Math.min(40, token.tracked_whale_trades.length * 20);
+  const confidence = Math.min(100, signalStrength + whaleBoost);
+  const confidenceColor =
+    confidence >= 70 ? "bg-buy" : confidence >= 40 ? "bg-yellow-400" : "bg-muted-foreground/40";
+
   const borderCls = hasWhales
     ? "border-yellow-400/40 hover:border-yellow-400/70"
     : token.signal === "BUY"
@@ -150,6 +160,22 @@ function TokenCard({ token }: { token: SmartMoneyToken }) {
           </span>
         )}
       </div>
+
+      {/* Confidence bar */}
+      {(hasVolume || hasWhales) && (
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <span className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Confidence</span>
+            <span className="font-mono text-[9px] text-muted-foreground">{confidence}%</span>
+          </div>
+          <div className="h-1 w-full rounded-full bg-muted overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all ${confidenceColor}`}
+              style={{ width: `${confidence}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Our tracked whale activity */}
       {hasWhales && (
@@ -285,16 +311,19 @@ export default function SmartMoneyPage() {
               <h1 className="font-mono text-xl font-bold tracking-tight text-foreground">
                 Smart Money
               </h1>
+              <span className="rounded-full border border-cyan/30 bg-cyan/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-cyan">
+                Birdeye Live
+              </span>
             </div>
             <p className="font-mono text-xs text-muted-foreground">
-              Birdeye smart money signal · ★ = our tracked whales also in this token · Green = buying · Red = selling
+              Tokens smart money wallets are actively trading · ★ = our tracked whales also in this position
             </p>
           </div>
 
           <div className="flex items-center gap-3">
             {generatedAt && (
               <span className="font-mono text-[10px] text-muted-foreground">
-                Updated {generatedAt}
+                Fetched {generatedAt} · refreshes every 15 min
               </span>
             )}
             <button
@@ -377,7 +406,7 @@ export default function SmartMoneyPage() {
         )}
 
         <p className="mt-8 font-mono text-[10px] text-muted-foreground/50 text-center">
-          Birdeye Smart Money (global) · ★ = our tracked whales also active in this token · Cached 15 min
+          Birdeye Smart Money — real-time data from Birdeye&apos;s smart money token list · ★ = our tracked whales also active · Confidence = signal strength + whale overlap · Cached 15 min
         </p>
       </main>
     </div>
