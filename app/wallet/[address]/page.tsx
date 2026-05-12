@@ -234,18 +234,6 @@ export default function WalletPage() {
               />
             </div>
 
-            {/* Net worth (if available) */}
-            {data.net_worth.total_usd != null && (
-              <div className="rounded-lg border border-border bg-card p-5 mb-8">
-                <p className="font-mono text-xs text-muted-foreground tracking-widest mb-2">
-                  CURRENT NET WORTH
-                </p>
-                <p className="font-mono text-2xl font-bold text-cyan">
-                  {fmt_usd(data.net_worth.total_usd)}
-                </p>
-              </div>
-            )}
-
             {/* Solscan link */}
             <div className="flex gap-4 mb-8">
               <a
