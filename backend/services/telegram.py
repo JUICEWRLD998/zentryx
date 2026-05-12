@@ -512,9 +512,6 @@ async def send_daily_briefing() -> None:
             badge = "✅" if ret > 0 else "❌"
             lines += ["", "<b>📈 Best Signal Yesterday</b>", f"${s['symbol']} {ret_str} since whale entry {badge}"]
 
-        # Footer
-        lines += ["", "View live → zentryx.app/live"]
-
         text = "\n".join(lines)
         await bot.send_message(
             chat_id=chat_id,

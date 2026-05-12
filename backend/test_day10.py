@@ -161,7 +161,7 @@ class TestSendDailyBriefing:
         ai_insight = "Whales rotated into meme tokens with established communities."
 
         with patch("services.telegram._get_bot", return_value=bot), \
-             patch("services.telegram._chat_id", return_value="123"), \
+             patch("services.telegram._group_chat_id", return_value="123"), \
              patch("services.telegram._build_briefing_data", AsyncMock(return_value=data)), \
              patch("services.gemini.analyse_daily_briefing", AsyncMock(return_value=ai_insight)):
             await send_daily_briefing()
@@ -182,7 +182,7 @@ class TestSendDailyBriefing:
         data = self._full_data()
 
         with patch("services.telegram._get_bot", return_value=bot), \
-             patch("services.telegram._chat_id", return_value="123"), \
+             patch("services.telegram._group_chat_id", return_value="123"), \
              patch("services.telegram._build_briefing_data", AsyncMock(return_value=data)), \
              patch("services.gemini.analyse_daily_briefing", AsyncMock(return_value=None)):
             await send_daily_briefing()
@@ -200,7 +200,7 @@ class TestSendDailyBriefing:
                                exit_tokens=[], best_signal=None)
 
         with patch("services.telegram._get_bot", return_value=bot), \
-             patch("services.telegram._chat_id", return_value="123"), \
+             patch("services.telegram._group_chat_id", return_value="123"), \
              patch("services.telegram._build_briefing_data", AsyncMock(return_value=data)), \
              patch("services.gemini.analyse_daily_briefing", AsyncMock(return_value=None)):
             await send_daily_briefing()
@@ -214,7 +214,7 @@ class TestSendDailyBriefing:
         data = self._full_data(sell_count=0, exit_tokens=[])
 
         with patch("services.telegram._get_bot", return_value=bot), \
-             patch("services.telegram._chat_id", return_value="123"), \
+             patch("services.telegram._group_chat_id", return_value="123"), \
              patch("services.telegram._build_briefing_data", AsyncMock(return_value=data)), \
              patch("services.gemini.analyse_daily_briefing", AsyncMock(return_value=None)):
             await send_daily_briefing()
@@ -228,7 +228,7 @@ class TestSendDailyBriefing:
         data = self._full_data(best_signal=None)
 
         with patch("services.telegram._get_bot", return_value=bot), \
-             patch("services.telegram._chat_id", return_value="123"), \
+             patch("services.telegram._group_chat_id", return_value="123"), \
              patch("services.telegram._build_briefing_data", AsyncMock(return_value=data)), \
              patch("services.gemini.analyse_daily_briefing", AsyncMock(return_value=None)):
             await send_daily_briefing()
@@ -240,7 +240,7 @@ class TestSendDailyBriefing:
     async def test_telegram_not_configured_no_crash(self):
         """When bot/chat_id are not set, must return silently without crashing."""
         with patch("services.telegram._get_bot", return_value=None), \
-             patch("services.telegram._chat_id", return_value=""):
+             patch("services.telegram._group_chat_id", return_value=""):
             await send_daily_briefing()  # must not raise
 
 
