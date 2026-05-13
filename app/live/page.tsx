@@ -216,7 +216,7 @@ function TokenModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4"
       onClick={onClose}
     >
       {/* Backdrop */}
@@ -224,13 +224,13 @@ function TokenModal({
 
       {/* Panel */}
       <div
-        className="relative z-10 w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-border bg-card font-mono shadow-2xl"
+        className="relative z-10 w-full max-w-lg max-h-[92vh] sm:max-h-[90vh] overflow-y-auto rounded-xl border border-border bg-card font-mono shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="sticky top-0 bg-card border-b border-border px-5 py-4">
+        <div className="sticky top-0 bg-card border-b border-border px-3 py-3 sm:px-5 sm:py-4">
           <div className="flex items-start justify-between gap-3">
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-1.5 min-w-0">
               <div className="flex items-center gap-2">
                 <span
                   className={`rounded px-2 py-0.5 text-xs font-bold tracking-wider ${
@@ -243,7 +243,7 @@ function TokenModal({
                   <span className="text-xs text-cyan">◆ SMART MONEY</span>
                 )}
               </div>
-              <p className="text-base font-bold text-foreground">${symbol}</p>
+              <p className="text-sm sm:text-base font-bold text-foreground">${symbol}</p>
               <p className="text-xs text-muted-foreground break-all">{event.token_address}</p>
               <div className="flex items-center gap-3 mt-0.5">
                 <span className="text-xs text-muted-foreground">{event.wallet_label}</span>
@@ -267,7 +267,7 @@ function TokenModal({
             LOADING REPORT...
           </div>
         ) : (
-          <div className="px-5 py-5 flex flex-col gap-6">
+          <div className="px-3 py-4 sm:px-5 sm:py-5 flex flex-col gap-4 sm:gap-6">
             {/* Security */}
             <div>
               <p className="text-xs text-muted-foreground tracking-widest mb-3">SECURITY</p>
