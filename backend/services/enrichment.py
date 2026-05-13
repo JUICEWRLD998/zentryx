@@ -664,6 +664,11 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
     if wallet_label is None:
         return
 
+    # True only when the event originates from a wallet in our tracked set.
+    # AI analysis (Groq) is gated behind this flag to avoid burning credits
+    # on untracked large-trade/whale-alert events.
+    is_tracked_wallet: bool = bool(wallet_address and wallet_address in tracked_wallets)
+
     logger.info(
         "Processing trade: %s | %s | $%s | %s",
         wallet_label, side.upper(), usd_value, token_address[:8],
@@ -808,7 +813,6 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
             "Trade value $%.0f below minimum $%.0f — skipping Telegram alert for %s",
             _trade_usd, _MIN_ALERT_USD, mini_report.symbol or token_address[:8],
         )
-        asyncio.create_task(_run_gemini(False))
         return
 
     now_mono = time.monotonic()
@@ -838,7 +842,14 @@ async def process_trade_event(raw_event: dict[str, Any]) -> None:
             _ALERT_COOLDOWN_S - (now_mono - last_alert_ts),
         )
 
-    asyncio.create_task(_run_gemini(shared_channel_alert_sent))
+    if is_tracked_wallet:
+        asyncio.create_task(_run_gemini(shared_channel_alert_sent))
+    else:
+        logger.debug(
+            "AI analysis skipped for non-tracked wallet %s — %s",
+            (wallet_address or "unknown")[:8],
+            mini_report.symbol or token_address[:8],
+        )
 
     # ── Telegram: per-user watchlist DMs ─────────────────────────────────
     asyncio.create_task(
