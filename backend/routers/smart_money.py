@@ -60,13 +60,13 @@ def _compute_signal(item: dict[str, Any]) -> tuple[str, float, float, float]:
     which itself indicates smart-money accumulation, so we default to BUY.
     """
     buy = float(
-        item.get("buy") or item.get("buyVolume") or item.get("buyAmountUsd") or 0
+        item.get("volume_buy_usd") or item.get("buy") or item.get("buyVolume") or item.get("buyAmountUsd") or 0
     )
     sell = float(
-        item.get("sell") or item.get("sellVolume") or item.get("sellAmountUsd") or 0
+        item.get("volume_sell_usd") or item.get("sell") or item.get("sellVolume") or item.get("sellAmountUsd") or 0
     )
     # Prefer an explicit net field; fall back to computing it.
-    net_raw = item.get("net") or item.get("netBuy") or item.get("net_buy")
+    net_raw = item.get("net_flow") or item.get("net") or item.get("netBuy") or item.get("net_buy")
     net = float(net_raw) if net_raw is not None else (buy - sell)
 
     if buy == 0 and sell == 0:
@@ -106,6 +106,9 @@ async def _build_heatmap(limit: int = 20) -> dict[str, Any]:
         if not addr:
             continue
         signal, buy_usd, sell_usd, net_usd = _compute_signal(item)
+        smart_money_count = int(
+            item.get("smart_traders_no") or item.get("smartMoneyCount") or item.get("smart_money_count") or 0
+        )
         tokens.append(
             {
                 "address": addr,
@@ -121,6 +124,7 @@ async def _build_heatmap(limit: int = 20) -> dict[str, Any]:
                 "buy_usd": round(buy_usd, 2),
                 "sell_usd": round(sell_usd, 2),
                 "net_usd": round(net_usd, 2),
+                "smart_money_count": smart_money_count,
             }
         )
 
